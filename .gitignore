@@ -1,0 +1,13 @@
+# data / outputs
+data/
+reports/_outputs/
+
+# python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
