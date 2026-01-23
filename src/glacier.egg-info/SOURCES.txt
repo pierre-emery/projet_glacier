@@ -1,0 +1,7 @@
+README.md
+setup.py
+src/glacier/__init__.py
+src/glacier.egg-info/PKG-INFO
+src/glacier.egg-info/SOURCES.txt
+src/glacier.egg-info/dependency_links.txt
+src/glacier.egg-info/top_level.txt

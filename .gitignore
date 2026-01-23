@@ -1,6 +1,7 @@
-# data: keep folder, ignore contents
-data/*
+# data: keep folder structure, ignore contents
+data/**
 !data/README.md
+!data/**/.gitkeep
 
 # reports outputs
 reports/_outputs/
@@ -14,3 +15,11 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+
+# Env (logins Earthdata)
+.env
+*.env
