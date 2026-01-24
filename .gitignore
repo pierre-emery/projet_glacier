@@ -20,6 +20,6 @@ Thumbs.db
 .ipynb_checkpoints/
 notebooks/.ipynb_checkpoints/
 
-# Env (logins Earthdata)
-.env
-*.env
+# _netrc (logins Earthdata)
+_netrc
+*_netrc

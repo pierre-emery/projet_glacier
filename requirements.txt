@@ -3,3 +3,8 @@ pandas
 scikit-learn
 matplotlib
 python-dotenv
+
+geopandas
+pyogrio
+shapely
+pyproj
