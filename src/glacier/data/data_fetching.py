@@ -119,7 +119,9 @@ def unzip_to(paths: list[Path], extracted_root: Path) -> list[Path]:
 
         dest.mkdir(parents=True, exist_ok=True)
 
-        with zipfile.ZipFile(p, "r") as z:
-            z.extractall(dest)
-
+        try:
+            with zipfile.ZipFile(p, "r") as z:
+                z.extractall(dest)
+        except zipfile.BadZipFile as e:
+            continue
         out_dirs.append(dest)
