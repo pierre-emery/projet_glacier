@@ -3,29 +3,31 @@
 \usepackage{hyperref}
 \usepackage{microtype}
 
-\title{Projet : Prédire l'évolution des glaciers}
+\title{Présentation de Projet : Prédire l'évolution des glaciers}
 \author{Fatou Ndao 20235568 \and Mohamed Atmani 20218934 \and Pierre Emery 20278920}
 \date{\today}
 
 \begin{document}
 \maketitle
-
-\section*{But du projet}
-Construire un modèle qui prédit l'évolution d'un glacier pour un horizon de temps donné à partir de ses observations passées. Concrètement, nous viserons quelque chose de relativement simple comme le changement d'aire par exemple du polygone qui représente l'outline du glacier.
-
-\section*{Pourquoi ce projet}
+\section*{Motivation}
 Les glaciers sont des indicateurs sensibles des changements climatiques, et comprendre (ou anticiper) leur évolution est important pour les impacts hydrologiques, écologiques et socioéconomiques.
 De plus, le projet est aussi formateur et intéressant d'un point de vue apprentissage automatique. Les données sont à la fois géographiques et temporelles, avec des observations irrégulières et des sources d'incertitude (qualité variable des outlines), ce qui rend la généralisation non-triviale.
 
-\section*{Jeu de données choisis et justification}
-Nous utiliserons GLIMS Glacier Database, Version 1 (NSIDC-0272).
-GLIMS fournit des outlines datés pour de nombreux glaciers, ce qui permet de construire des paires temporelles et ce qui permet aussi de séparer par glaciers pour s'assurer d'éviter d'avoir du dataleakage.
-Nous voudrions aussi implémenter peut-être des méthodes d'apprentissage profond sur des images satelittes mais ne sommes pas sur comment s'y prendre puisqu'on ne voudrait pas passer toute la session à labeliser des données.
-Pour les données satelittes nous nous intéressions au images prises par Sentinel-2.
+\section*{Objectifs}
+L'objectif de ce projet est de construire un modèle multimodal capable de prédire l'évolution des glaciers à partir de leurs observations passées. Plus précisément, nous viserons à prédire l'évolution des glaciers en analysant les séries temporelles des contours des glaciers et en intégrant des données climatiques pour affiner les prédictions futures.
 
+Pour cela, nous utiliserons un réseau de neurones convolutif multimodal (CNN). Dans un premier temps, nous testerons des architectures moins coûteuses en calcul, comme All-CNN, comme baseline. Ensuite, nous passerons à des architectures plus adaptées à la tâche, comme Wide ResNet, ou encore U-Net, qui est particulièrement bien adaptée aux tâches de segmentation d'images. Le modèle prendra en entrée des images satellites de Sentinel-2 représentant l'état actuel des glaciers, ainsi que des données climatiques (température, précipitations) pour prévoir un nouveau contour de glacier après un certain nombre d'années. L'objectif est de prédire l'évolution future des glaciers en tenant compte des changements climatiques.
 
+\section*{Jeux de données choisis et justification}
+Pour ce projet, nous utiliserons principalement deux jeux de données :
+\begin{itemize}
+    \item \textbf{GLIMS Glacier Database, Version 1 (NSIDC-0272)} : Ce jeu de données fournit des contours datés pour de nombreux glaciers, permettant ainsi de construire des séries temporelles et d'analyser l'évolution des glaciers au fil du temps.
+    \item \textbf{Sentinel-2} : Ce sont des images ayant une résolution spatiale élevée et nous permettant de détecter des détails supplémentaires sur les glaciers.
+\end{itemize}
 
 \vspace{0.8em}
-\noindent\textbf{Lien dataset (référence) :} \url{https://nsidc.org/data/nsidc-0272/versions/1}\\
-\url{https://dataspace.copernicus.eu/data-collections/copernicus-sentinel-data/sentinel-2}
+\noindent\textbf{Lien dataset GLIMS :} \url{https://nsidc.org/data/nsidc-0272/versions/1}\\
+
+\noindent\textbf{Lien dataset Sentinel-2 :} \url{https://dataspace.copernicus.eu/data-collections/copernicus-sentinel-data/sentinel-2}
+
 \end{document}
