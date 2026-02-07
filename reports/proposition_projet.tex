@@ -11,11 +11,17 @@
 \maketitle
 
 \section*{But du projet}
-Construire un modèle qui prédit l'évolution d'un glacier pour un horizon de temps donné à partir de ses observations passées. Concrètement, nous viserons quelque chose de relativement simple comme le changement d'aire par exemple du polygone qui représente l'outline du glacier.
+L'objectif principal est de construire un modèle d'apprentissage automatique capable de prédire l'évolution d'un glacier à partir de ses observations passées.
+Concrètement, nous viserons quelque chose de relativement simple comme le changement d'aire par exemple du polygone qui représente l'outline du glacier.
 
 \section*{Pourquoi ce projet}
 Les glaciers sont des indicateurs sensibles des changements climatiques, et comprendre (ou anticiper) leur évolution est important pour les impacts hydrologiques, écologiques et socioéconomiques.
-De plus, le projet est aussi formateur et intéressant d'un point de vue apprentissage automatique. Les données sont à la fois géographiques et temporelles, avec des observations irrégulières et des sources d'incertitude (qualité variable des outlines), ce qui rend la généralisation non-triviale.
+De plus, le projet est aussi formateur et intéressant d'un point de vue apprentissage automatique:
+\begin{itemize}
+    \item Les données sont spatio-temporelles.
+    \item Les obversations sont irrégulières dans le temps(pas de fréquence régulière).
+    \item Les sources contiennent de l'incertitude (qualité variable des outlines), rendant la généralisation non-triviale.
+\end{itemize} 
 
 \section*{Jeu de données choisis et justification}
 Nous utiliserons GLIMS Glacier Database, Version 1 (NSIDC-0272).
