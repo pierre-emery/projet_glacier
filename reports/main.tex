@@ -1,0 +1,192 @@
+\documentclass[11pt]{article}
+
+% This file will be kept up-to-date at the following GitHub repository:
+%
+% https://github.com/alexhernandezgarcia/latex-simple
+%
+% Please file any issues/bug reports, etc. you may have at:
+%
+% https://github.com/alexhernandezgarcia/latex-simple/issues
+
+% With no package options, the submission will be anonymized, the supplemental
+% material will be suppressed, and line numbers will be added to the manuscript.
+%
+% To hide the supplementary material (e.g., for the first submission deadline),
+% use the [hidesupplement] option:
+%
+% \usepackage[hidesupplement]{latex-simple}
+%
+% To compile a non-anonymized camera-ready version, add the [final] option (for
+% the main track) e.g.,
+%
+% \usepackage[final]{latex-simple}
+%
+% or
+%
+% \usepackage[final, hidesupplement]{latex-simple}
+
+\usepackage[final]{latex-simple}
+
+% You may use any reference style as long as you are consistent throughout the
+% document. As a default we suggest author--year citations; for bibtex and
+% natbib you may use:
+
+\usepackage{natbib}
+
+% and for biber and biblatex you may use:
+
+% \usepackage[%
+%   backend=biber,
+%   style=authoryear-comp,
+%   sortcites=true,
+%   natbib=true,
+%   giveninits=true,
+%   maxcitenames=2,
+%   doi=false,
+%   url=true,
+%   isbn=false,
+%   dashed=false
+% ]{biblatex}
+% \addbibresource{...}
+
+% AMS math
+\usepackage{amsmath}
+\usepackage{amsthm}
+
+% Dummy text
+\usepackage[english]{babel}
+\usepackage{blindtext}
+
+% Other packages
+\usepackage{microtype} % microtypography
+\usepackage{booktabs}  % tables
+\usepackage{url}  % urls
+
+%%%%%%%%%
+% TITLE %
+%%%%%%%%%
+
+\title{Draft Rapport Final}
+
+%%%%%%%%%%%
+% AUTHORS %
+%%%%%%%%%%%
+
+% The syntax for adding an author is
+%
+% \author[i]{\nameemail{author name}{author email}}
+%
+% where i is an affiliation counter. Authors may have
+% multiple affiliations; e.g.:
+%
+% \author[1,2]{\nameemail{Anonymous}{anonymous@example.com}}
+
+\author[1]{\nameemail{Mohamed Atmani}{mohamed.atmani@umontreal.ca}}
+\author[1]{\nameemail{Fatou Ndao}{fatou.ndao@umontreal.ca}}
+\author[1]{\nameemail{Pierre Emery}{pierre.emery@umontreal.ca}}
+
+% if you need to force a linebreak in the author list, prepend an \author entry
+% with \\:
+
+% \author[3]{\\\nameemail{Author 5}{email5@example.com}}
+
+% Specify corresponding affiliations after authors, referring to counter used in
+% \author:
+
+\affil[1]{Université de Montréal}
+%%%%%%%
+% PDF %
+%%%%%%%
+
+% define PDF metadata, please fill in to aid in accessibility of the resulting PDF
+\hypersetup{%
+  pdfauthor={Lovelace, Mitchell and Johnson}, % will be reset to "Anonymous" unless the "final" package option is given
+  pdftitle={A dummy paper with the LaTeX-simple template},
+  pdfsubject={dummyness},
+  pdfkeywords={latex-simple}
+}
+
+%%%%%%%%%
+% PAPER %
+%%%%%%%%%
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+  Résumé.
+\end{abstract}
+
+\section{Introduction}
+
+\blindtext. The text above is meaningless, but more interesting stuff can be found in \citet{mitchell2003venus}.
+\blindtext
+\blindtext
+\blindtext
+\pagebreak
+\section{Revue de la littérature}
+\input{revue}
+
+
+\begin{table}[h]
+\label{tab:thetable}
+\caption{A lil table}
+\begin{center}
+\begin{tabular}{ll}
+Letters & Numbers \\
+\hline            \\
+A       & 1       \\
+B       & 2       \\
+C       & 3       \\
+\end{tabular}
+\end{center}
+\end{table}
+
+\section{The last section}
+
+\blindmathfalse
+
+\begin{figure}[t]
+\label{fig:thefigure}
+\begin{center}
+\fbox{\rule[-.5cm]{0cm}{4cm} \rule[-.5cm]{4cm}{0cm}}
+\end{center}
+\caption{Ceci n'est pas un carré.}
+\end{figure}
+
+\blindtext[2]
+
+% content will be automatically hidden during submission
+\begin{acknowledgements}
+  \blindtext
+\end{acknowledgements}
+
+%%%%%%%%%%%%%%%%
+% BIBLIOGRAPHY %
+%%%%%%%%%%%%%%%%
+
+% for bibtex / natbib, use:
+
+\bibliographystyle{latex-simple}
+\bibliography{references}
+
+% and for biber / biblatex, use:
+
+% \printbibliography
+
+%%%%%%%%%%%%
+% APPENDIX %
+%%%%%%%%%%%%
+
+% supplemental material -- everything hereafter will be suppressed during
+% submission time if the hidesupplement option is provided!
+\vfill
+\pagebreak
+\appendix
+
+\section{The first appendix}
+
+\blindtext
+
+\end{document}

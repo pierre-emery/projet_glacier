@@ -1,0 +1,16 @@
+
+
+\paragraph{Revue de la littérature}
+La prédiction de l'évolution des glaciers est un sujet qui a été étudié depuis plusieurs décennies car ce sujet nous permet de mieux comprendre les effets du réchauffement climatiques ainsi que l'impact sur les ressources en eau. 
+
+\paragraph{Modèles avant l'apprentissage automatique} 
+Avant l'utilisation de l'apprentissage automatique, l'évolution des glaciers était modélisée à l'aide de modèles physiques tels que les modèles d'indice de température [\href{https://ui.adsabs.harvard.edu/abs/2003JHyd..282..104H/abstract}{$1$}]. Ce genre de modèle estiment la relation entre la fonte des glaciers et des variables climatiques comme la température de l'air, qui sont souvent représentés par une relation linéaire. Même si ces modèles sont peu couteux lorsqu'il s'agit de calculs, ils se reposent sur des hypothèses trop simples, ce qui rend leur capacité à prédire l'évolution des glaciers peu fiable.
+
+\paragraph{Observation satellite et base de données des glaciers}
+La mise à disposition de données climatiques et d'images satellites au grand public a joué un rôle important dans la recherche de meilleurs modèles sur l'évolution des glaciers et de la Terre en général. Des base de données comme la {\href{https://nsidc.org/data/nsidc-0272/versions/1}{\emph{GLIMS Glacier Database}}\href{https://www.sciencedirect.com/science/article/abs/pii/S0921818106001597}{[2]} qui fournissent des contours datés pour des milliers de glaciers à travers le monde ainsi que les images satellites telles que celles de \href{https://dataspace.copernicus.eu/data-collections/copernicus-sentinel-data/sentinel-2}{Sentinel-2}\href{https://www.sciencedirect.com/science/article/abs/pii/S0034425712000636?via%3Dihub}{[3]} ont permis de nous donner une vision détaillée de l'évolution des glaciers.
+
+\paragraph{Apprentissage automatique et segmentation glaciaire}
+Les méthodes d'apprentissage automatique ont montré de très bonnes performances pour la prédiction des glaciers. Plus précisement, cela a surtout été observé avec les réseaux de neuronnes convolutionnels (CNN) \href{https://www.iro.umontreal.ca/~lisa/pointeurs/lecun-01a.pdf}{[4]} dans le cas de la segmentation des images satellites. Les différentes architectures convolutionnelles telles que le U-Net \href{https://link.springer.com/chapter/10.1007/978-3-319-24574-4_28#preview}{[5]} sont utilisés très couramment de nos jours. Plusieurs travaux ont montré que ces approches sont généralement supérieurs aux méthodes classiques.
+
+\paragraph{Approche proposée pour le projet}
+Contrairement aux travaux qui se limitent à la segmentation d'images satellite, nous développons un modèle de prédiction supervisé en utilisant un réseau de neuronne convolutionnel sur les images satellites de Sentinel-2 en fusionnant le résultat avec les données de contours de glaciers de GLIMS. Pour le CNN, nous comparons différentes architectures convolutionnels tels que U-Nets pour déterminer l'architecture la plus adéquate.
