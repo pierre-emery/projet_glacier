@@ -165,3 +165,28 @@ def make_prediction_view(
 
 def make_polygon_view(gdf_base: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return explode_multipolygons(gdf_base).reset_index(drop=True)
+
+# Puisqu'on commencera par utiliser que les alpes et la caucase
+# BBox approx (lon_min, lat_min, lon_max, lat_max) en EPSG:4326
+
+BBOX_ALPS     = (5.0, 44.0, 16.5, 48.5)
+BBOX_CAUCASUS = (37.0, 41.0, 49.5, 45.5)
+
+def filter_alps_caucasus(glims_clean: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    gdf = glims_clean.copy()
+    if gdf.crs is None:
+        gdf = gdf.set_crs(4326)
+    else:
+        gdf = gdf.to_crs(4326)
+
+    cent = gdf.geometry.centroid
+
+    def in_box(c, bbox):
+        return c.x.between(bbox[0], bbox[2]) & c.y.between(bbox[1], bbox[3])
+
+    mask_alps = in_box(cent, BBOX_ALPS)
+    mask_cauc = in_box(cent, BBOX_CAUCASUS)
+
+    out = gdf[mask_alps | mask_cauc].copy()
+    out["region"] = np.where(mask_alps.loc[out.index], "alps", "caucasus")
+    return out

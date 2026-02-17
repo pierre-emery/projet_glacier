@@ -6,6 +6,7 @@ import requests
 from dotenv import load_dotenv
 import zipfile
 
+
 BASE_URL = "https://daacdata.apps.nsidc.org/pub/DATASETS/nsidc0272_GLIMS_v1/"
 VERSION_TAG = "v01.0"  # si ça change un jour, vous modifiez ici
 
@@ -125,3 +126,4 @@ def unzip_to(paths: list[Path], extracted_root: Path) -> list[Path]:
         except zipfile.BadZipFile as e:
             continue
         out_dirs.append(dest)
+

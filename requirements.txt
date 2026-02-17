@@ -14,3 +14,10 @@ pyarrow
 contextily
 plotly
 ipywidgets
+
+pystac-client
+stackstac
+rioxarray
+rasterio
+xarray
+dask
