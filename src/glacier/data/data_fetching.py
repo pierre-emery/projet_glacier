@@ -5,10 +5,19 @@ import os
 import requests
 from dotenv import load_dotenv
 import zipfile
+import pystac_client
+import pyproj
+import stackstac
+import rioxarray
+import pandas as pd
 
 
 BASE_URL = "https://daacdata.apps.nsidc.org/pub/DATASETS/nsidc0272_GLIMS_v1/"
 VERSION_TAG = "v01.0"  # si ça change un jour, vous modifiez ici
+
+STAC_URL = "https://earth-search.aws.element84.com/v1"
+COLLECTION = "sentinel-2-l2a"
+
 
 def _session() -> requests.Session:
     """ Pour télécharger le jeu de données il faut créer un compte Earthdata.
@@ -127,3 +136,170 @@ def unzip_to(paths: list[Path], extracted_root: Path) -> list[Path]:
             continue
         out_dirs.append(dest)
 
+
+def utm_epsg_from_bbox(bbox):
+    lon = (bbox[0] + bbox[2]) / 2
+    lat = (bbox[1] + bbox[3]) / 2
+    zone = int((lon + 180) // 6) + 1
+    return (32600 + zone) if lat >= 0 else (32700 + zone)
+
+
+def bbox_to_projected_bounds(bbox, epsg):
+    transformer = pyproj.Transformer.from_crs(4326, epsg, always_xy=True)
+    minx, miny = transformer.transform(bbox[0], bbox[1])
+    maxx, maxy = transformer.transform(bbox[2], bbox[3])
+    return (min(minx, maxx), min(miny, maxy), max(minx, maxx), max(miny, maxy))
+
+
+def search_items(bbox, start_date, end_date, max_cloud=40, limit=50):
+    catalog = pystac_client.Client.open(STAC_URL)
+    search = catalog.search(
+        collections=[COLLECTION],
+        bbox=list(bbox),
+        datetime=f"{start_date}/{end_date}",
+        query={"eo:cloud_cover": {"lt": max_cloud}},
+        limit=limit,
+    )
+    items = list(search.items())
+
+    # sort by cloud cover if present
+    items.sort(key=lambda it: it.properties.get("eo:cloud_cover", 1e9))
+    return items
+
+
+def build_requests(glaciers_gdf, out_root: Path, split_map, buffer_deg=0.02):
+    """
+    glaciers_gdf must contain: glac_id, region, geometry (EPSG:4326)
+    split_map: dict region -> "train"/"test"/"val"
+    out_root: .../data/sentinel2
+    """
+    out_root = Path(out_root)
+    rows = []
+
+    for _, r in glaciers_gdf.iterrows():
+        reg = r["region"]
+        split = split_map.get(reg, "train")
+
+        y = int(r["year_img"])  # <-- une seule année par glacier
+
+        minx, miny, maxx, maxy = r["geometry"].bounds
+        bbox = (minx - buffer_deg, miny - buffer_deg, maxx + buffer_deg, maxy + buffer_deg)
+
+        out_path = out_root / "composites" / split / reg / f"{r['glac_id']}_{y}_summer.tif"
+        rows.append({
+            "glac_id": r["glac_id"],
+            "region": reg,
+            "split": split,
+            "year": y,
+            "bbox_minlon": bbox[0],
+            "bbox_minlat": bbox[1],
+            "bbox_maxlon": bbox[2],
+            "bbox_maxlat": bbox[3],
+            "out_path": str(out_path),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def fetch_composite(
+    bbox,
+    start_date,
+    end_date,
+    out_path: Path,
+    bands=("blue", "green", "red", "nir"),
+    resolution=10,
+    max_cloud=40,
+    limit=50,
+    reducer="median",  # "median" or "first"
+):
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if out_path.exists():
+        return {"status": "skipped", "path": str(out_path)}
+
+    items = search_items(bbox, start_date, end_date, max_cloud=max_cloud, limit=limit)
+    if len(items) == 0:
+        return {"status": "no_items", "path": str(out_path)}
+
+    epsg = utm_epsg_from_bbox(bbox)
+    bounds = bbox_to_projected_bounds(bbox, epsg)
+
+    da = stackstac.stack(
+        items,
+        assets=list(bands),
+        epsg=epsg,
+        resolution=resolution,
+        bounds=bounds,
+    ).chunk({"time": 1, "x": 1024, "y": 1024})
+
+    if reducer == "median":
+        comp = da.median(dim="time", skipna=True)
+    else:
+        comp = da.isel(time=0)
+
+    comp = comp.assign_coords(band=list(bands))
+    comp.rio.write_crs(f"EPSG:{epsg}", inplace=True)
+
+    comp.rio.to_raster(
+        out_path,
+        compress="DEFLATE",
+        predictor=2,
+        tiled=True,
+        BIGTIFF="IF_SAFER",
+    )
+
+    return {"status": "ok", "path": str(out_path), "n_items": len(items), "epsg": epsg}
+
+
+def run_fetch(
+    requests_df: pd.DataFrame,
+    months=(6, 7, 8, 9),
+    bands=("blue", "green", "red", "nir"),
+    resolution=10,
+    max_cloud=40,
+    limit=50,
+    reducer="median",
+):
+    """
+    Loop over requests and fetch composites. Returns status df.
+    """
+    statuses = []
+    for _, row in requests_df.iterrows():
+        y = int(row["year"])
+        start_date = f"{y}-{months[0]:02d}-01"
+        end_date = f"{y}-{months[-1]:02d}-30"
+
+        bbox = (
+            float(row["bbox_minlon"]),
+            float(row["bbox_minlat"]),
+            float(row["bbox_maxlon"]),
+            float(row["bbox_maxlat"]),
+        )
+
+        out_path = Path(row["out_path"])
+
+        try:
+            meta = fetch_composite(
+                bbox=bbox,
+                start_date=start_date,
+                end_date=end_date,
+                out_path=out_path,
+                bands=bands,
+                resolution=resolution,
+                max_cloud=max_cloud,
+                limit=limit,
+                reducer=reducer,
+            )
+        except Exception as e:
+            meta = {"status": "error", "path": str(out_path), "error": repr(e)}
+
+        statuses.append({
+            "glac_id": row["glac_id"],
+            "region": row["region"],
+            "split": row["split"],
+            "year": y,
+            **meta,
+        })
+
+    return pd.DataFrame(statuses)

@@ -171,13 +171,11 @@ def make_polygon_view(gdf_base: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
 BBOX_ALPS     = (5.0, 44.0, 16.5, 48.5)
 BBOX_CAUCASUS = (37.0, 41.0, 49.5, 45.5)
+BBOX_ANDES = (-76.0, -56.0, -66.0, -16.0)
 
-def filter_alps_caucasus(glims_clean: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def filter_regions(glims_clean: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     gdf = glims_clean.copy()
-    if gdf.crs is None:
-        gdf = gdf.set_crs(4326)
-    else:
-        gdf = gdf.to_crs(4326)
+    gdf = gdf.set_crs(4326) if gdf.crs is None else gdf.to_crs(4326)
 
     cent = gdf.geometry.centroid
 
@@ -186,7 +184,12 @@ def filter_alps_caucasus(glims_clean: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
     mask_alps = in_box(cent, BBOX_ALPS)
     mask_cauc = in_box(cent, BBOX_CAUCASUS)
+    mask_and  = in_box(cent, BBOX_ANDES)
 
-    out = gdf[mask_alps | mask_cauc].copy()
-    out["region"] = np.where(mask_alps.loc[out.index], "alps", "caucasus")
+    out = gdf[mask_alps | mask_cauc | mask_and].copy()
+    out["region"] = np.select(
+        [mask_alps.loc[out.index], mask_cauc.loc[out.index], mask_and.loc[out.index]],
+        ["alps", "caucasus", "andes"],
+        default="other",
+    )
     return out
