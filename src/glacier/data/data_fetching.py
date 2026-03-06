@@ -359,3 +359,90 @@ def filter_readable_items(items, bbox, epsg, bounds, resolution, test_asset="blu
         except Exception:
             continue
     return good
+
+def glims_mask_for_composite( tif_path: str | Path, glims_gdf: gpd.GeoDataFrame, area_min: float = 0.05, ) -> tuple[np.ndarray, int, gpd.GeoDataFrame]:
+    """ Build a binary mask aligned with a Sentinel-2 composite GeoTIFF.
+    Steps: - Read GeoTIFF to get CRS, bounds, transform, shape.
+        - Parse target year from filename (..._<year>_summer.tif).
+        - Reproject GLIMS to image CRS. 
+        - Select polygons intersecting the image footprint. 
+        - Optionally filter by area_min. 
+        - For each glac_id, keep the outline whose src_date_dt year is closest to year_img. 
+        - Rasterize to a (H, W) uint8 mask where glacier=1, background=0. 
+    Returns: mask: np.ndarray (H, W) dtype uint8 year_img: int inter_one: GeoDataFrame of selected outlines (one per glac_id) 
+    """
+    tif_path = Path(tif_path)
+    year_img = year_from_filename(tif_path)
+
+    # open composite
+    da = rxr.open_rasterio(tif_path)  # (band, y, x)
+
+    img_crs = da.rio.crs
+    if img_crs is None:
+        raise ValueError(f"GeoTIFF has no CRS: {tif_path}")
+
+    transform = da.rio.transform()
+    H, W = da.rio.height, da.rio.width
+    minx, miny, maxx, maxy = da.rio.bounds()
+
+    patch_geom = box(minx, miny, maxx, maxy)
+
+    # copy GLIMS
+    gl = glims_gdf.copy()
+
+    # ensure CRS
+    if gl.crs is None:
+        gl = gl.set_crs(4326)
+
+    # ensure required columns
+    if "src_date_dt" not in gl.columns:
+        raise ValueError("glims_gdf must contain 'src_date_dt' (datetime) column.")
+
+    if "glac_id" not in gl.columns:
+        raise ValueError("glims_gdf must contain 'glac_id' column.")
+
+    # clean ids
+    gl["glac_id"] = gl["glac_id"].astype(str).str.strip()
+
+    # project to image CRS
+    gl = gl.to_crs(img_crs)
+
+    # intersect with patch
+    inter = gl[gl.intersects(patch_geom)].copy()
+
+    if len(inter) == 0:
+        return np.zeros((H, W), dtype=np.uint8), year_img, inter
+
+    # optional area filter
+    if area_min is not None and "area" in inter.columns:
+        inter = inter[inter["area"] >= area_min].copy()
+
+    if len(inter) == 0:
+        return np.zeros((H, W), dtype=np.uint8), year_img, inter
+
+    # choose outline closest in time for each glacier
+    inter["src_year"] = inter["src_date_dt"].dt.year
+    inter["gap"] = (inter["src_year"] - year_img).abs()
+
+    inter_one = (
+        inter.sort_values(["glac_id", "gap"])
+        .drop_duplicates("glac_id", keep="first")
+        .copy()
+    )
+
+    # rasterize outlines
+    shapes = [
+        (geom, 1)
+        for geom in inter_one.geometry
+        if geom is not None and not geom.is_empty
+    ]
+
+    mask = rasterize(
+        shapes=shapes,
+        out_shape=(H, W),
+        transform=transform,
+        fill=0,
+        dtype=np.uint8,
+    )
+
+    return mask, year_img, inter_one
