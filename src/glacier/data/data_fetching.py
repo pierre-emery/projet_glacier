@@ -11,6 +11,12 @@ import stackstac
 import rioxarray
 import pandas as pd
 import time, random
+import re
+import rioxarray as rxr
+import numpy as np
+
+from shapely.geometry import box
+from rasterio.features import rasterize
 
 
 BASE_URL = "https://daacdata.apps.nsidc.org/pub/DATASETS/nsidc0272_GLIMS_v1/"
@@ -105,6 +111,25 @@ def fetch_data(date_yyyymmdd: str, raw_dir: str | Path = "data/raw/glims_v1") ->
 
     return downloaded
 
+def fetch_and_extract_glims(
+    date_yyyymmdd: str,
+    raw_dir: str | Path = "data/raw/glims_v1",
+    extracted_dir: str | Path = "data/raw/glims_v1_extracted",
+) -> list[Path]:
+    root = repo_root()
+
+    raw_dir = Path(raw_dir)
+    if not raw_dir.is_absolute():
+        raw_dir = root / raw_dir
+
+    extracted_dir = Path(extracted_dir)
+    if not extracted_dir.is_absolute():
+        extracted_dir = root / extracted_dir
+
+    zips = fetch_data(date_yyyymmdd=date_yyyymmdd, raw_dir=raw_dir)
+    extracted = unzip_to(zips, extracted_root=extracted_dir)
+    return extracted
+
 def unzip_to(paths: list[Path], extracted_root: Path) -> list[Path]:
     """
     Dézippe les fichiers .zip dans extracted_root.
@@ -136,6 +161,7 @@ def unzip_to(paths: list[Path], extracted_root: Path) -> list[Path]:
         except zipfile.BadZipFile as e:
             continue
         out_dirs.append(dest)
+    return out_dirs
 
 
 def utm_epsg_from_bbox(bbox):
@@ -360,77 +386,62 @@ def filter_readable_items(items, bbox, epsg, bounds, resolution, test_asset="blu
             continue
     return good
 
-def glims_mask_for_composite( tif_path: str | Path, glims_gdf: gpd.GeoDataFrame, area_min: float = 0.05, ) -> tuple[np.ndarray, int, gpd.GeoDataFrame]:
-    """ Build a binary mask aligned with a Sentinel-2 composite GeoTIFF.
-    Steps: - Read GeoTIFF to get CRS, bounds, transform, shape.
-        - Parse target year from filename (..._<year>_summer.tif).
-        - Reproject GLIMS to image CRS. 
-        - Select polygons intersecting the image footprint. 
-        - Optionally filter by area_min. 
-        - For each glac_id, keep the outline whose src_date_dt year is closest to year_img. 
-        - Rasterize to a (H, W) uint8 mask where glacier=1, background=0. 
-    Returns: mask: np.ndarray (H, W) dtype uint8 year_img: int inter_one: GeoDataFrame of selected outlines (one per glac_id) 
+def glims_mask_for_composite(tif_path, glims_gdf, max_gap_years=3):
+    """
+    Build a binary glacier mask aligned with a Sentinel-2 composite GeoTIFF.
+
+    The function:
+    - reads the composite GeoTIFF,
+    - extracts the target glacier id and image year from the filename,
+    - keeps GLIMS outlines for that glacier,
+    - selects the outline whose year is closest to the image year,
+    - clips it to the patch extent,
+    - rasterizes it into a binary mask where glacier=1 and background=0.
+
+    Parameters
+    ----------
+    tif_path : str or Path
+        Path to a composite file named like <glac_id>_<year>_summer.tif
+    glims_gdf : GeoDataFrame
+        GLIMS outlines with at least columns: glac_id, src_date_dt, geometry
+    max_gap_years : int
+        Maximum allowed gap in years between the image year and the GLIMS outline year
+
+    Returns
+    -------
+    mask : np.ndarray
+        Binary mask of shape (H, W), dtype uint8
+    year_img : int
+        Year extracted from the composite filename
+    inter_one : GeoDataFrame
+        The selected GLIMS outline used to create the mask
     """
     tif_path = Path(tif_path)
-    year_img = year_from_filename(tif_path)
 
-    # open composite
-    da = rxr.open_rasterio(tif_path)  # (band, y, x)
+    glac_id = tif_path.stem.split("_")[0].strip()
+    year_img = int(re.search(r"_(\d{4})_summer$", tif_path.stem).group(1))
 
+    da = rxr.open_rasterio(tif_path)
     img_crs = da.rio.crs
-    if img_crs is None:
-        raise ValueError(f"GeoTIFF has no CRS: {tif_path}")
-
     transform = da.rio.transform()
     H, W = da.rio.height, da.rio.width
-    minx, miny, maxx, maxy = da.rio.bounds()
+    patch_geom = box(*da.rio.bounds())
 
-    patch_geom = box(minx, miny, maxx, maxy)
-
-    # copy GLIMS
     gl = glims_gdf.copy()
-
-    # ensure CRS
     if gl.crs is None:
         gl = gl.set_crs(4326)
 
-    # ensure required columns
-    if "src_date_dt" not in gl.columns:
-        raise ValueError("glims_gdf must contain 'src_date_dt' (datetime) column.")
-
-    if "glac_id" not in gl.columns:
-        raise ValueError("glims_gdf must contain 'glac_id' column.")
-
-    # clean ids
     gl["glac_id"] = gl["glac_id"].astype(str).str.strip()
-
-    # project to image CRS
+    gl = gl[gl["glac_id"] == glac_id].copy()
     gl = gl.to_crs(img_crs)
 
-    # intersect with patch
     inter = gl[gl.intersects(patch_geom)].copy()
+    inter["gap"] = (inter["src_date_dt"].dt.year - year_img).abs()
+    inter = inter[inter["gap"] <= max_gap_years].copy()
 
-    if len(inter) == 0:
-        return np.zeros((H, W), dtype=np.uint8), year_img, inter
+    inter_one = inter.sort_values("gap").head(1).copy()
+    inter_one["geometry"] = inter_one.geometry.intersection(patch_geom)
 
-    # optional area filter
-    if area_min is not None and "area" in inter.columns:
-        inter = inter[inter["area"] >= area_min].copy()
-
-    if len(inter) == 0:
-        return np.zeros((H, W), dtype=np.uint8), year_img, inter
-
-    # choose outline closest in time for each glacier
-    inter["src_year"] = inter["src_date_dt"].dt.year
-    inter["gap"] = (inter["src_year"] - year_img).abs()
-
-    inter_one = (
-        inter.sort_values(["glac_id", "gap"])
-        .drop_duplicates("glac_id", keep="first")
-        .copy()
-    )
-
-    # rasterize outlines
     shapes = [
         (geom, 1)
         for geom in inter_one.geometry

@@ -4,6 +4,13 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 
+# Puisqu'on commencera par utiliser que les alpes et la caucase
+# BBox approx (lon_min, lat_min, lon_max, lat_max) en EPSG:4326
+
+BBOX_ALPS     = (5.0, 44.0, 16.5, 48.5)
+BBOX_CAUCASUS = (37.0, 41.0, 49.5, 45.5)
+BBOX_ANDES = (-76.0, -56.0, -66.0, -16.0)
+
 
 def keep_outlines(gdf: gpd.GeoDataFrame, value: str = "glac_bound") -> gpd.GeoDataFrame:
     if "line_type" not in gdf.columns:
@@ -18,27 +25,15 @@ def drop_empty_geometries(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return gdf[~gdf.geometry.is_empty]
 
 
-def parse_anlys_time(gdf: gpd.GeoDataFrame, col: str = "anlys_time") -> gpd.GeoDataFrame:
-    if col not in gdf.columns:
-        return gdf
-    gdf = gdf.copy()
-    gdf[col] = pd.to_datetime(gdf[col], errors="coerce", utc=True)
-    return gdf
-
-
-def parse_src_date(gdf: gpd.GeoDataFrame, col: str = "src_date") -> gpd.GeoDataFrame:
-    if col not in gdf.columns:
-        return gdf
-    gdf = gdf.copy()
-    gdf["src_date_dt"] = pd.to_datetime(gdf[col], errors="coerce", utc=True)
-    return gdf
-
+def ensure_wgs84(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    if gdf.crs is None:
+        return gdf.set_crs(4326)
+    return gdf.to_crs(4326)
 
 def ensure_crs(gdf: gpd.GeoDataFrame, epsg: int = 4326) -> gpd.GeoDataFrame:
     if getattr(gdf, "crs", None) is None:
         return gdf.set_crs(epsg)
     return gdf
-
 
 def fix_invalid_geometries(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     gdf = gdf.copy()
@@ -48,67 +43,133 @@ def fix_invalid_geometries(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         gdf["geometry"] = gdf.geometry.buffer(0)
     return drop_empty_geometries(gdf)
 
+def parse_anlys_time(gdf: gpd.GeoDataFrame, col: str = "anlys_time") -> gpd.GeoDataFrame:
+    if col not in gdf.columns:
+        return gdf
+    gdf = gdf.copy()
+    gdf[col] = pd.to_datetime(gdf[col], errors="coerce", utc=True)
+    return gdf
 
-def explode_multipolygons(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    return gdf.explode(index_parts=False)
+
+def parse_src_date(gdf: gpd.GeoDataFrame, col: str = "src_date") -> gpd.GeoDataFrame:
+    gdf = gdf.copy()
+    if col in gdf.columns:
+        gdf["src_date_dt"] = pd.to_datetime(gdf[col], errors="coerce", utc=True)
+    else:
+        gdf["src_date_dt"] = pd.NaT
+    return gdf
+
 
 
 def filter_positive_area(gdf: gpd.GeoDataFrame, col: str = "area") -> gpd.GeoDataFrame:
     if col not in gdf.columns:
         return gdf
-    gdf = gdf[gdf[col].notna()]
-    return gdf[gdf[col] > 0]
-
-
-def clean_elevations_soft(
-    gdf: gpd.GeoDataFrame,
-    cols: tuple[str, str, str] = ("min_elev", "mean_elev", "max_elev"),
-    sentinel: float = -9999,
-    set_nonpositive_to_nan: bool = False,
-    enforce_order: bool = False,
-) -> gpd.GeoDataFrame:
-    gdf = gdf.copy()
-    present = [c for c in cols if c in gdf.columns]
-    if not present:
-        return gdf
-
-    for c in present:
-        gdf[c] = pd.to_numeric(gdf[c], errors="coerce")
-        gdf.loc[gdf[c] == sentinel, c] = np.nan
-        if set_nonpositive_to_nan:
-            gdf.loc[gdf[c] <= 0, c] = np.nan
-
-    if enforce_order and all(c in gdf.columns for c in cols):
-        ok = (
-            gdf["min_elev"].isna() | gdf["mean_elev"].isna() | gdf["max_elev"].isna()
-        ) | (
-            (gdf["min_elev"] <= gdf["mean_elev"]) & (gdf["mean_elev"] <= gdf["max_elev"])
-        )
-        gdf.loc[~ok, list(cols)] = np.nan
-
-    return gdf
-
-
-def cast_categories(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    cols = ["primeclass", "surge_type", "term_type", "gtng_o1reg", "gtng_o2reg", "rgi_gl_typ", "conn_lvl"]
-    for c in cols:
-        if c in gdf.columns:
-            gdf[c] = gdf[c].astype("category")
-    return gdf
-
+    gdf = gdf[gdf[col].notna()].copy()
+    return gdf[gdf[col] > 0].copy()
 
 def drop_exact_dupes(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    if "glac_id" not in gdf.columns or "geometry" not in gdf.columns:
-        return gdf
-
     gdf = gdf.copy()
     gdf["_geom_wkb"] = gdf.geometry.to_wkb()
 
-    subset = ["glac_id"] + (["src_date_dt"] if "src_date_dt" in gdf.columns else []) + ["_geom_wkb"]
+    subset = ["glac_id", "_geom_wkb"]
+    if "src_date_dt" in gdf.columns:
+        subset.insert(1, "src_date_dt")
+
     gdf = gdf.drop_duplicates(subset=subset)
+    return gdf.drop(columns="_geom_wkb")
 
-    return gdf.drop(columns=["_geom_wkb"])
+def _in_bbox(centroids, bbox):
+    return (
+        centroids.x.between(bbox[0], bbox[2]) &
+        centroids.y.between(bbox[1], bbox[3])
+    )
 
+def filter_regions(gdf: gpd.GeoDataFrame, keep=("alps", "caucasus", "andes")) -> gpd.GeoDataFrame:
+    gdf = ensure_wgs84(gdf).copy()
+    cent = gdf.geometry.centroid
+
+    masks = {
+        "alps": _in_bbox(cent, BBOX_ALPS),
+        "caucasus": _in_bbox(cent, BBOX_CAUCASUS),
+        "andes": _in_bbox(cent, BBOX_ANDES),
+    }
+
+    keep_mask = np.zeros(len(gdf), dtype=bool)
+    for r in keep:
+        keep_mask |= masks[r].to_numpy()
+
+    out = gdf.loc[keep_mask].copy()
+
+    out["region"] = "other"
+    for r in keep:
+        out.loc[masks[r].loc[out.index], "region"] = r
+
+    return out
+
+def filter_years_for_satellite(
+    gdf: gpd.GeoDataFrame,
+    min_year: int = 2016,
+    max_year: int = 2026,
+    require_date: bool = True,
+) -> gpd.GeoDataFrame:
+    gdf = gdf.copy()
+
+    if "src_date_dt" not in gdf.columns:
+        return gdf if not require_date else gdf.iloc[0:0].copy()
+
+    if require_date:
+        gdf = gdf[gdf["src_date_dt"].notna()].copy()
+
+    years = gdf["src_date_dt"].dt.year
+    return gdf[years.between(min_year, max_year)].copy()
+
+
+def keep_useful_columns(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    cols = [c for c in [
+        "glac_id",
+        "src_date",
+        "src_date_dt",
+        "area",
+        "region",
+        "geometry",
+    ] if c in gdf.columns]
+    return gdf[cols].copy()
+
+
+def clean_glims_for_satellite(
+    gdf: gpd.GeoDataFrame,
+    min_year: int = 2016,
+    max_year: int = 2026,
+    keep_regions=("alps", "caucasus", "andes"),
+) -> gpd.GeoDataFrame:
+    gdf = keep_outlines(gdf)
+    gdf = drop_empty_geometries(gdf)
+    gdf = ensure_wgs84(gdf)
+    gdf = fix_invalid_geometries(gdf)
+    gdf = parse_src_date(gdf)
+    gdf = filter_positive_area(gdf)
+    gdf = filter_regions(gdf, keep=keep_regions)
+    gdf = filter_years_for_satellite(gdf, min_year=min_year, max_year=max_year)
+    gdf = drop_exact_dupes(gdf)
+    gdf = keep_useful_columns(gdf)
+    return gdf.reset_index(drop=True)
+
+
+def select_outline_closest_to_year(
+    gdf: gpd.GeoDataFrame,
+    target_year: int,
+) -> gpd.GeoDataFrame:
+    g = gdf.copy()
+    g = g[g["src_date_dt"].notna()].copy()
+    g["src_year"] = g["src_date_dt"].dt.year
+    g["gap_year"] = (g["src_year"] - target_year).abs()
+
+    g = (
+        g.sort_values(["glac_id", "gap_year", "src_date_dt"])
+         .drop_duplicates("glac_id", keep="first")
+         .copy()
+    )
+    return g.reset_index(drop=True)
 
 def clean_glims_outlines(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     gdf = gdf.copy()
@@ -166,30 +227,5 @@ def make_prediction_view(
 def make_polygon_view(gdf_base: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return explode_multipolygons(gdf_base).reset_index(drop=True)
 
-# Puisqu'on commencera par utiliser que les alpes et la caucase
-# BBox approx (lon_min, lat_min, lon_max, lat_max) en EPSG:4326
 
-BBOX_ALPS     = (5.0, 44.0, 16.5, 48.5)
-BBOX_CAUCASUS = (37.0, 41.0, 49.5, 45.5)
-BBOX_ANDES = (-76.0, -56.0, -66.0, -16.0)
 
-def filter_regions(glims_clean: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    gdf = glims_clean.copy()
-    gdf = gdf.set_crs(4326) if gdf.crs is None else gdf.to_crs(4326)
-
-    cent = gdf.geometry.centroid
-
-    def in_box(c, bbox):
-        return c.x.between(bbox[0], bbox[2]) & c.y.between(bbox[1], bbox[3])
-
-    mask_alps = in_box(cent, BBOX_ALPS)
-    mask_cauc = in_box(cent, BBOX_CAUCASUS)
-    mask_and  = in_box(cent, BBOX_ANDES)
-
-    out = gdf[mask_alps | mask_cauc | mask_and].copy()
-    out["region"] = np.select(
-        [mask_alps.loc[out.index], mask_cauc.loc[out.index], mask_and.loc[out.index]],
-        ["alps", "caucasus", "andes"],
-        default="other",
-    )
-    return out
