@@ -263,7 +263,7 @@ def fetch_composite(
     epsg = utm_epsg_from_bbox(bbox)
     bounds = bbox_to_projected_bounds(bbox, epsg)
 
-    items = filter_readable_items(items, bbox, epsg, bounds, resolution, test_asset=bands[0])
+    # items = filter_readable_items(items, bbox, epsg, bounds, resolution, test_asset=bands[0])  ## jai mis en commentaire car trop long a run avec
     if len(items) == 0:
         return {"status": "no_readable_items", "path": str(out_path)}
 
@@ -392,11 +392,11 @@ def glims_mask_for_composite(tif_path, glims_gdf, max_gap_years=3):
 
     The function:
     - reads the composite GeoTIFF,
-    - extracts the target glacier id and image year from the filename,
-    - keeps GLIMS outlines for that glacier,
-    - selects the outline whose year is closest to the image year,
-    - clips it to the patch extent,
-    - rasterizes it into a binary mask where glacier=1 and background=0.
+    - extracts the image year from the filename,
+    - keeps all GLIMS outlines intersecting the patch extent,
+    - filters outlines whose year is close enough to the image year,
+    - clips them to the patch extent,
+    - rasterizes them into a binary mask where glacier=1 and background=0.
 
     Parameters
     ----------
@@ -405,7 +405,7 @@ def glims_mask_for_composite(tif_path, glims_gdf, max_gap_years=3):
     glims_gdf : GeoDataFrame
         GLIMS outlines with at least columns: glac_id, src_date_dt, geometry
     max_gap_years : int
-        Maximum allowed gap in years between the image year and the GLIMS outline year
+        Maximum allowed gap in years between the image year and a GLIMS outline year
 
     Returns
     -------
@@ -413,12 +413,11 @@ def glims_mask_for_composite(tif_path, glims_gdf, max_gap_years=3):
         Binary mask of shape (H, W), dtype uint8
     year_img : int
         Year extracted from the composite filename
-    inter_one : GeoDataFrame
-        The selected GLIMS outline used to create the mask
+    inter : GeoDataFrame
+        All GLIMS outlines used to create the mask
     """
     tif_path = Path(tif_path)
 
-    glac_id = tif_path.stem.split("_")[0].strip()
     year_img = int(re.search(r"_(\d{4})_summer$", tif_path.stem).group(1))
 
     da = rxr.open_rasterio(tif_path)
@@ -432,19 +431,21 @@ def glims_mask_for_composite(tif_path, glims_gdf, max_gap_years=3):
         gl = gl.set_crs(4326)
 
     gl["glac_id"] = gl["glac_id"].astype(str).str.strip()
-    gl = gl[gl["glac_id"] == glac_id].copy()
     gl = gl.to_crs(img_crs)
 
+    # garder tous les outlines qui intersectent le patch
     inter = gl[gl.intersects(patch_geom)].copy()
+
+    # filtrage temporel
     inter["gap"] = (inter["src_date_dt"].dt.year - year_img).abs()
     inter = inter[inter["gap"] <= max_gap_years].copy()
 
-    inter_one = inter.sort_values("gap").head(1).copy()
-    inter_one["geometry"] = inter_one.geometry.intersection(patch_geom)
+    # clip à l'emprise du patch
+    inter["geometry"] = inter.geometry.intersection(patch_geom)
 
     shapes = [
         (geom, 1)
-        for geom in inter_one.geometry
+        for geom in inter.geometry
         if geom is not None and not geom.is_empty
     ]
 
@@ -456,4 +457,70 @@ def glims_mask_for_composite(tif_path, glims_gdf, max_gap_years=3):
         dtype=np.uint8,
     )
 
-    return mask, year_img, inter_one
+    return mask, year_img, inter
+
+def stretch(x):
+    lo, hi = np.nanpercentile(x, 2), np.nanpercentile(x, 98)
+    return np.clip((x - lo) / (hi - lo + 1e-6), 0, 1)
+
+def get_glims_outlines_for_patch(tif_path, glims_gdf, max_gap_years=3):
+    tif_path = Path(tif_path)
+    year_img = int(re.search(r"_(\d{4})_summer$", tif_path.stem).group(1))
+
+    da = rxr.open_rasterio(tif_path)
+    img_crs = da.rio.crs
+    patch_geom = box(*da.rio.bounds())
+
+    gl = glims_gdf.copy()
+    if gl.crs is None:
+        gl = gl.set_crs(4326)
+
+    gl["glac_id"] = gl["glac_id"].astype(str).str.strip()
+    gl = gl.to_crs(img_crs)
+
+    inter = gl[gl.intersects(patch_geom)].copy()
+    inter["gap"] = (inter["src_date_dt"].dt.year - year_img).abs()
+    inter = inter[inter["gap"] <= max_gap_years].copy()
+
+    if len(inter) == 0:
+        return inter, year_img
+
+    inter["geometry"] = inter.geometry.intersection(patch_geom)
+    inter = inter[~inter.geometry.is_empty].copy()
+
+    return inter, year_img
+
+def show_tif_rgb_with_outline(tif_path, glims_gdf=None, max_gap_years=3, ax=None):
+    da = rxr.open_rasterio(tif_path).astype("float32")
+    minx, miny, maxx, maxy = da.rio.bounds()
+
+    blue  = stretch(da[0].values)
+    green = stretch(da[1].values)
+    red   = stretch(da[2].values)
+    rgb = np.stack([red, green, blue], axis=-1)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(4, 4))
+
+    ax.imshow(
+        rgb,
+        extent=[minx, maxx, miny, maxy],
+        origin="upper",
+        interpolation="bilinear"
+    )
+
+    if glims_gdf is not None:
+        inter, year_img = get_glims_outlines_for_patch(
+            tif_path, glims_gdf, max_gap_years=max_gap_years
+        )
+        if len(inter) > 0:
+            # remplissage léger pour mieux voir l’alignement
+            inter.plot(ax=ax, color="yellow", alpha=0.18, edgecolor="none")
+            # contour net par-dessus
+            inter.boundary.plot(ax=ax, color="yellow", linewidth=1.0)
+    else:
+        year_img = "?"
+
+    ax.set_title(f"{Path(tif_path).parent.name} | {Path(tif_path).stem} | year={year_img}", fontsize=8)
+    ax.axis("off")
+    return ax

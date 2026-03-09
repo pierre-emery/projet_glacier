@@ -14,6 +14,7 @@ from rasterio.transform import from_bounds
 from shapely.ops import transform as shp_transform
 from pyproj import Transformer
 from IPython.display import display
+from scipy.ndimage import binary_dilation
 
 CLS_LABELS = {
     0: "autre",
@@ -215,15 +216,20 @@ def monthly_best_grid(
     use_scl=True,
     top_per_month=1,
     day_end=30,
+    glacier_geom_wgs84=None,
+    scl_resolution=20,
+    ring_iters=12,
 ):
     """
     Pour chaque mois:
-      - récupère des items STAC sur [YYYY-MM-01, YYYY-MM-day_end]
-      - calcule score (SCL si dispo)
+      - récupère des items STAC sur [YYYY-MM-01, YYYY-MM-last_day]
+      - calcule un score :
+          * global bbox si glacier_geom_wgs84 is None
+          * glacier-aware sinon
       - affiche la/les meilleures dates du mois (RGB + masque)
     """
     for m in months:
-        last_day = calendar.monthrange(year, m)[1]  # 28/29/30/31
+        last_day = calendar.monthrange(year, m)[1]
         start_date = f"{year}-{m:02d}-01"
         end_date   = f"{year}-{m:02d}-{last_day:02d}"
 
@@ -232,14 +238,36 @@ def monthly_best_grid(
             print(f"[{year}-{m:02d}] aucun item")
             continue
 
-        df, items_sorted = rank_dates_from_items(items, bbox, use_scl=use_scl)
+        if glacier_geom_wgs84 is None:
+            df, items_sorted = rank_dates_from_items(items, bbox, use_scl=use_scl)
 
-        # On affiche un petit résumé
-        head = df.head(top_per_month)[["datetime","score","cloud_frac","snow_frac","shadow_frac","eo_cloud_cover"]]
+            head_cols = ["datetime", "score", "cloud_frac", "snow_frac", "shadow_frac", "eo_cloud_cover"]
+        else:
+            df, items_sorted = rank_dates_from_items_glacier(
+                items=items,
+                bbox=bbox,
+                glacier_geom_wgs84=glacier_geom_wgs84,
+                use_scl=use_scl,
+                scl_resolution=scl_resolution,
+                ring_iters=ring_iters,
+            )
+
+            head_cols = [
+                "datetime",
+                "score",
+                "g_cloud_frac",
+                "g_shadow_frac",
+                "g_snow_frac",
+                "r_snow_frac",
+                "g_valid_frac",
+                "eo_cloud_cover",
+            ]
+
+        head = df.head(top_per_month)[head_cols]
+
         print(f"\n=== {year}-{m:02d} | n_items={len(items)} ===")
         display(head)
 
-        # Et on affiche visuellement les top dates (RGB + masque)
         show_topk_gallery(df, items_sorted, bbox, topk=top_per_month, scl_panel=True)
 
 def rasterize_glacier_mask(glacier_geom_wgs84, bbox, out_shape, resolution, epsg):
@@ -254,3 +282,158 @@ def rasterize_glacier_mask(glacier_geom_wgs84, bbox, out_shape, resolution, epsg
     mask = rasterize([(geom_proj, 1)], out_shape=out_shape, transform=transform, fill=0, dtype="uint8")
     return mask.astype(bool)
 
+def scl_fractions_on_mask(scl, mask):
+    valid = (scl != 0) & mask
+    denom = valid.sum()
+
+    if denom == 0:
+        return dict(
+            valid_px=0,
+            cloud_frac=np.nan,
+            shadow_frac=np.nan,
+            snow_frac=np.nan,
+            dark_frac=np.nan,
+            valid_frac=np.nan,
+        )
+
+    cloud  = np.isin(scl, list(SCL_CLOUD))  & valid
+    shadow = np.isin(scl, list(SCL_SHADOW)) & valid
+    snow   = np.isin(scl, list(SCL_SNOW))   & valid
+    dark   = np.isin(scl, list(SCL_DARK))   & valid
+
+    return dict(
+        valid_px=int(denom),
+        cloud_frac=float(cloud.sum() / denom),
+        shadow_frac=float(shadow.sum() / denom),
+        snow_frac=float(snow.sum() / denom),
+        dark_frac=float(dark.sum() / denom),
+        valid_frac=float(denom / mask.sum()) if mask.sum() > 0 else np.nan,
+    )
+
+def glacier_ring_mask(glacier_mask, n_iter=12):
+    """
+    Crée une couronne autour du glacier.
+    n_iter dépend de la résolution; à 20 m, 12 pixels ~ 240 m.
+    """
+    dilated = binary_dilation(glacier_mask, iterations=n_iter)
+    ring = dilated & (~glacier_mask)
+    return ring
+
+
+def glacier_aware_score(m_glacier, m_ring=None, month=None):
+    """
+    Plus bas = mieux.
+    Idée:
+      - nuages sur glacier = très mauvais
+      - ombres sur glacier = mauvais
+      - neige autour = mauvais modéré
+      - neige sur glacier = faible pénalité seulement
+      - peu de pixels valides sur glacier = pénalité
+      - bonus saisonnier possible
+    """
+    def clean(d, k, default=0.0):
+        v = d.get(k, default) if d is not None else default
+        if v is None:
+            return default
+        if isinstance(v, float) and np.isnan(v):
+            return default
+        return float(v)
+
+    g_cloud  = clean(m_glacier, "cloud_frac")
+    g_shadow = clean(m_glacier, "shadow_frac")
+    g_snow   = clean(m_glacier, "snow_frac")
+    g_dark   = clean(m_glacier, "dark_frac")
+    g_valid  = clean(m_glacier, "valid_frac")
+
+    r_cloud  = clean(m_ring, "cloud_frac")
+    r_shadow = clean(m_ring, "shadow_frac")
+    r_snow   = clean(m_ring, "snow_frac")
+
+    score = 0.0
+
+    # Priorité absolue: voir le glacier
+    score += 4.0 * g_cloud
+    score += 2.0 * g_shadow
+    score += 1.0 * g_dark
+
+    # La neige SUR glacier n'est pas forcément rédhibitoire
+    score += 0.5 * g_snow
+
+    # La neige AUTOUR du glacier est plus suspecte (neige saisonnière)
+    score += 1.2 * r_snow
+    score += 0.8 * r_cloud
+    score += 0.4 * r_shadow
+
+    # Si peu de pixels valides sur le glacier, grosse pénalité
+    score += 3.0 * max(0.0, 1.0 - g_valid)
+
+    return float(score)
+
+def rank_dates_from_items_glacier(
+    items,
+    bbox,
+    glacier_geom_wgs84,
+    use_scl=True,
+    scl_resolution=20,
+    ring_iters=12,
+):
+    items = sorted(items, key=lambda it: it.datetime)
+    rows = []
+
+    epsg = utm_epsg_from_bbox(bbox)
+
+    for it in items:
+        dt = pd.Timestamp(it.datetime)
+        month = dt.month
+
+        # SCL
+        scl = load_scl_for_item(it, bbox, resolution=scl_resolution) if use_scl else None
+
+        if scl is None:
+            # fallback proxy si SCL absent
+            x = load_patch_for_item(it, bbox, bands=("blue", "green", "red", "nir"), resolution=10)
+            m_proxy = proxy_quality_metrics(x)
+
+            rows.append({
+                "datetime": dt,
+                "eo_cloud_cover": float(it.properties.get("eo:cloud_cover", np.nan)),
+                "score": quality_score(m_proxy),
+                "mode": "proxy_only",
+            })
+            continue
+
+        # masque glacier dans la grille du SCL
+        glacier_mask = rasterize_glacier_mask(
+            glacier_geom_wgs84=glacier_geom_wgs84,
+            bbox=bbox,
+            out_shape=scl.shape,
+            resolution=scl_resolution,
+            epsg=epsg,
+        )
+
+        ring_mask = glacier_ring_mask(glacier_mask, n_iter=ring_iters)
+
+        m_glacier = scl_fractions_on_mask(scl, glacier_mask)
+        m_ring    = scl_fractions_on_mask(scl, ring_mask)
+
+        score = glacier_aware_score(m_glacier, m_ring, month=month)
+
+        rows.append({
+            "datetime": dt,
+            "eo_cloud_cover": float(it.properties.get("eo:cloud_cover", np.nan)),
+            "score": score,
+            "mode": "scl_glacier",
+            "g_valid_px": m_glacier["valid_px"],
+            "g_valid_frac": m_glacier["valid_frac"],
+            "g_cloud_frac": m_glacier["cloud_frac"],
+            "g_shadow_frac": m_glacier["shadow_frac"],
+            "g_snow_frac": m_glacier["snow_frac"],
+            "g_dark_frac": m_glacier["dark_frac"],
+            "r_valid_px": m_ring["valid_px"],
+            "r_cloud_frac": m_ring["cloud_frac"],
+            "r_shadow_frac": m_ring["shadow_frac"],
+            "r_snow_frac": m_ring["snow_frac"],
+        })
+
+    df = pd.DataFrame(rows).sort_values("score").reset_index(drop=True)
+    return df, items
