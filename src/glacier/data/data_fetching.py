@@ -7,16 +7,20 @@ from dotenv import load_dotenv
 import zipfile
 import pystac_client
 import pyproj
+from pyproj import Transformer
 import stackstac
-import rioxarray
 import pandas as pd
+import geopandas as gpd
 import time, random
 import re
 import rioxarray as rxr
 import numpy as np
+import matplotlib.pyplot as plt
 
 from shapely.geometry import box
 from rasterio.features import rasterize
+from shapely.ops import transform as shp_transform
+from glacier.visualisation import rank_dates_from_items_glacier
 
 
 BASE_URL = "https://daacdata.apps.nsidc.org/pub/DATASETS/nsidc0272_GLIMS_v1/"
@@ -163,6 +167,15 @@ def unzip_to(paths: list[Path], extracted_root: Path) -> list[Path]:
         out_dirs.append(dest)
     return out_dirs
 
+# Ici si vous voulez savoir pourquoi on choisi ces periodes precisement c'est avec ces periodes que nous avions les meilleurs
+# resultats dans le notebook de visualisation
+
+REGION_WINDOWS = {
+    "alps":     {"start": (9, 15),  "end": (10, 10)},
+    "caucasus": {"start": (8, 15),  "end": (9, 15)},
+    "andes":    {"start": (4, 1),  "end": (5, 1)},
+}
+
 
 def utm_epsg_from_bbox(bbox):
     lon = (bbox[0] + bbox[2]) / 2
@@ -204,11 +217,12 @@ def adaptive_buffer_deg(geom, k=0.5, min_buf=0.005, max_buf=0.02):
     buf = k * max_dim
     return max(min_buf, min(max_buf, buf))
 
-def build_requests(glaciers_gdf, out_root: Path, k=0.5, min_buf=0.005, max_buf=0.02):
-    """
-    glaciers_gdf must contain: glac_id, region, geometry (EPSG:4326), year_img
-    out_root: .../data/sentinel2
-    """
+def build_requests(
+    glaciers_gdf,
+    out_root: Path,
+    patch_size_px=314,
+    resolution=10,
+):
     out_root = Path(out_root)
     rows = []
 
@@ -216,27 +230,31 @@ def build_requests(glaciers_gdf, out_root: Path, k=0.5, min_buf=0.005, max_buf=0
         reg = r["region"]
         glac_id = r["glac_id"]
         y = int(r["year_img"])
+        geom = r["geometry"]
 
-        minx, miny, maxx, maxy = r["geometry"].bounds
-        buf = adaptive_buffer_deg(r["geometry"], k=k, min_buf=min_buf, max_buf=max_buf)
+        bbox = fixed_bbox_around_geom(
+            geom_wgs84=geom,
+            patch_size_px=patch_size_px,
+            resolution=resolution,
+        )
 
-        bbox = (minx - buf, miny - buf, maxx + buf, maxy + buf)
-
-        out_path = out_root / "composites" / reg / f"{glac_id}_{y}_summer.tif"
+        out_path = out_root / "composites" / reg / f"{glac_id}_{y}_topk.tif"
 
         rows.append({
             "glac_id": glac_id,
             "region": reg,
             "year": y,
+            "geometry": geom,
             "bbox_minlon": bbox[0],
             "bbox_minlat": bbox[1],
             "bbox_maxlon": bbox[2],
             "bbox_maxlat": bbox[3],
             "out_path": str(out_path),
-            "buffer_deg": buf,   # utile pour debug
+            "patch_size_px": patch_size_px,
+            "resolution": resolution,
         })
 
-    return pd.DataFrame(rows)
+    return gpd.GeoDataFrame(rows, geometry="geometry", crs=glaciers_gdf.crs)
 
 
 def fetch_composite(
@@ -293,32 +311,46 @@ def fetch_composite(
 
     return {"status": "ok", "path": str(out_path), "n_items": len(items), "epsg": epsg}
 
+def dates_for_region_year(region: str, year: int, region_windows=None):
+    if region_windows is None:
+        region_windows = REGION_WINDOWS
+
+    cfg = region_windows.get(region)
+    if cfg is None:
+        raise ValueError(f"Fenêtre temporelle absente pour la région: {region}")
+
+    sm, sd = cfg["start"]
+    em, ed = cfg["end"]
+
+    start_date = f"{year}-{sm:02d}-{sd:02d}"
+    end_date   = f"{year}-{em:02d}-{ed:02d}"
+    return start_date, end_date
 
 def run_fetch(
-    requests_df: pd.DataFrame,
-    months=(6, 7, 8, 9),
+    requests_gdf,
+    region_windows=None,
     bands=("blue", "green", "red", "nir"),
     resolution=10,
-    max_cloud=60,
-    limit=15,
-    reducer="first",
+    max_cloud=95,
+    limit=80,
+    topk=3,
+    reducer="median",
+    use_scl=True,
+    scl_resolution=20,
+    ring_iters=12,
 ):
-    """
-    Loop over requests and fetch composites. Returns status df.
-    """
     statuses = []
-    for _, row in requests_df.iterrows():
+
+    for _, row in requests_gdf.iterrows():
         y = int(row["year"])
         region = row["region"]
+        glacier_geom_wgs84 = row["geometry"]
 
-        # mois par région (simple)
-        if region == "andes":
-            months_use = (1, 2, 3)      # été austral (simple, sans wrap)
-        else:
-            months_use = (6, 7, 8, 9)   # été boréal
-
-        start_date = f"{y}-{months_use[0]:02d}-01"
-        end_date   = f"{y}-{months_use[-1]:02d}-30"
+        start_date, end_date = dates_for_region_year(
+            region=region,
+            year=y,
+            region_windows=region_windows,
+        )
 
         bbox = (
             float(row["bbox_minlon"]),
@@ -330,8 +362,9 @@ def run_fetch(
         out_path = Path(row["out_path"])
 
         try:
-            meta = fetch_composite(
+            meta = fetch_composite_topk(
                 bbox=bbox,
+                glacier_geom_wgs84=glacier_geom_wgs84,
                 start_date=start_date,
                 end_date=end_date,
                 out_path=out_path,
@@ -339,14 +372,18 @@ def run_fetch(
                 resolution=resolution,
                 max_cloud=max_cloud,
                 limit=limit,
+                topk=topk,
                 reducer=reducer,
+                use_scl=use_scl,
+                scl_resolution=scl_resolution,
+                ring_iters=ring_iters,
             )
         except Exception as e:
             meta = {"status": "error", "path": str(out_path), "error": repr(e)}
 
         statuses.append({
             "glac_id": row["glac_id"],
-            "region": row["region"],
+            "region": region,
             "year": y,
             **meta,
         })
@@ -359,7 +396,7 @@ def year_from_filename(path: str | Path) -> int:
     Returns an int year.
     """
     p = Path(path)
-    m = re.search(r"_(\d{4})_summer$", p.stem)
+    m = re.search(r"_(\d{4})_(summer|topk)$", p.stem)
     if not m:
         raise ValueError(f"Could not parse year from filename: {p.name}")
     return int(m.group(1))
@@ -418,7 +455,7 @@ def glims_mask_for_composite(tif_path, glims_gdf, max_gap_years=3):
     """
     tif_path = Path(tif_path)
 
-    year_img = int(re.search(r"_(\d{4})_summer$", tif_path.stem).group(1))
+    year_img = int(re.search(r"_(\d{4})_(summer|topk)$", tif_path.stem).group(1))
 
     da = rxr.open_rasterio(tif_path)
     img_crs = da.rio.crs
@@ -465,7 +502,7 @@ def stretch(x):
 
 def get_glims_outlines_for_patch(tif_path, glims_gdf, max_gap_years=3):
     tif_path = Path(tif_path)
-    year_img = int(re.search(r"_(\d{4})_summer$", tif_path.stem).group(1))
+    year_img = int(re.search(r"_(\d{4})_(summer|topk)$", tif_path.stem).group(1))
 
     da = rxr.open_rasterio(tif_path)
     img_crs = da.rio.crs
@@ -524,3 +561,149 @@ def show_tif_rgb_with_outline(tif_path, glims_gdf=None, max_gap_years=3, ax=None
     ax.set_title(f"{Path(tif_path).parent.name} | {Path(tif_path).stem} | year={year_img}", fontsize=8)
     ax.axis("off")
     return ax
+
+def build_composite_from_items(
+    items,
+    bbox,
+    bands=("blue", "green", "red", "nir"),
+    resolution=10,
+    reducer="median",
+):
+    if len(items) == 0:
+        return None
+
+    epsg = utm_epsg_from_bbox(bbox)
+    bounds = bbox_to_projected_bounds(bbox, epsg)
+
+    da = stackstac.stack(
+        items,
+        assets=list(bands),
+        epsg=epsg,
+        resolution=resolution,
+        bounds=bounds,
+    ).chunk({"time": 1, "x": 1024, "y": 1024})
+
+    if reducer == "median":
+        comp = da.median(dim="time", skipna=True)
+    elif reducer == "first":
+        comp = da.isel(time=0)
+    else:
+        raise ValueError(f"Reducer inconnu: {reducer}")
+
+    comp = comp.assign_coords(band=list(bands))
+    comp.rio.write_crs(f"EPSG:{epsg}", inplace=True)
+    return comp
+
+def save_composite_xarray(comp, out_path):
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    comp.rio.to_raster(
+        out_path,
+        compress="DEFLATE",
+        predictor=2,
+        tiled=True,
+        BIGTIFF="IF_SAFER",
+    )
+    return out_path
+
+
+def fetch_composite_topk(
+    bbox,
+    glacier_geom_wgs84,
+    start_date,
+    end_date,
+    out_path,
+    bands=("blue", "green", "red", "nir"),
+    resolution=10,
+    max_cloud=95,
+    limit=80,
+    topk=3,
+    reducer="median",
+    use_scl=True,
+    scl_resolution=20,
+    ring_iters=12,
+):
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if out_path.exists():
+        return {"status": "skipped", "path": str(out_path)}
+
+    items = search_items(
+        bbox=bbox,
+        start_date=start_date,
+        end_date=end_date,
+        max_cloud=max_cloud,
+        limit=limit,
+    )
+    if len(items) == 0:
+        return {"status": "no_items", "path": str(out_path)}
+
+    df_rank, _ = rank_dates_from_items_glacier(
+        items=items,
+        bbox=bbox,
+        glacier_geom_wgs84=glacier_geom_wgs84,
+        use_scl=use_scl,
+        scl_resolution=scl_resolution,
+        ring_iters=ring_iters,
+    )
+
+    best_dts = list(pd.to_datetime(df_rank.head(topk)["datetime"]))
+    selected_items = [
+        it for it in items
+        if pd.Timestamp(it.datetime) in best_dts
+    ]
+
+    if len(selected_items) == 0:
+        return {"status": "no_ranked_items", "path": str(out_path)}
+
+    comp = build_composite_from_items(
+        selected_items,
+        bbox=bbox,
+        bands=bands,
+        resolution=resolution,
+        reducer=reducer,
+    )
+
+    if comp is None:
+        return {"status": "empty_composite", "path": str(out_path)}
+
+    save_composite_xarray(comp, out_path)
+
+    return {
+        "status": "ok",
+        "path": str(out_path),
+        "n_items_all": len(items),
+        "n_items_selected": len(selected_items),
+        "topk": topk,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+
+def fixed_bbox_around_geom(geom_wgs84, patch_size_px=314, resolution=10):
+    """
+    Retourne une bbox WGS84 correspondant à un patch carré fixe.
+    patch_size_px=314 et resolution=10 -> patch de 3140 m.
+    """
+    minx, miny, maxx, maxy = geom_wgs84.bounds
+    center_lon = 0.5 * (minx + maxx)
+    center_lat = 0.5 * (miny + maxy)
+
+    epsg = utm_epsg_from_bbox((minx, miny, maxx, maxy))
+
+    to_utm = Transformer.from_crs(4326, epsg, always_xy=True).transform
+    to_wgs = Transformer.from_crs(epsg, 4326, always_xy=True).transform
+
+    cx, cy = to_utm(center_lon, center_lat)
+
+    half_size_m = 0.5 * patch_size_px * resolution
+    patch_utm = box(
+        cx - half_size_m,
+        cy - half_size_m,
+        cx + half_size_m,
+        cy + half_size_m,
+    )
+
+    patch_wgs = shp_transform(to_wgs, patch_utm)
+    return patch_wgs.bounds
