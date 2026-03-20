@@ -90,7 +90,7 @@ def repo_root(start: Path | None = None) -> Path:
         if (parent / ".git").exists():
             return parent
     raise RuntimeError("Repo root not found (no .git).")
-
+ 
 def fetch_data(date_yyyymmdd: str, raw_dir: str | Path = "data/raw/glims_v1") -> list[Path]:
     """
     Fetch GLIMS NSIDC-0272 pour une date spécifique.
@@ -98,42 +98,42 @@ def fetch_data(date_yyyymmdd: str, raw_dir: str | Path = "data/raw/glims_v1") ->
     Le md5 sert à vérifier que le zip n'est pas corrompu.
     """
     root = repo_root()
-
+ 
     raw_dir = Path(raw_dir)
     if not raw_dir.is_absolute():
         raw_dir = root / raw_dir
     raw_dir.mkdir(parents=True, exist_ok=True)
-
+ 
     s = _session()
     targets = _targets_for_date(date_yyyymmdd)
-
+ 
     downloaded: list[Path] = []
     for name in targets:
         out = raw_dir / name
         _download_one(s, BASE_URL + name, out)
         downloaded.append(out)
-
+ 
     return downloaded
-
+ 
 def fetch_and_extract_glims(
     date_yyyymmdd: str,
     raw_dir: str | Path = "data/raw/glims_v1",
     extracted_dir: str | Path = "data/raw/glims_v1_extracted",
 ) -> list[Path]:
     root = repo_root()
-
+ 
     raw_dir = Path(raw_dir)
     if not raw_dir.is_absolute():
         raw_dir = root / raw_dir
-
+ 
     extracted_dir = Path(extracted_dir)
     if not extracted_dir.is_absolute():
         extracted_dir = root / extracted_dir
-
+ 
     zips = fetch_data(date_yyyymmdd=date_yyyymmdd, raw_dir=raw_dir)
     extracted = unzip_to(zips, extracted_root=extracted_dir)
     return extracted
-
+ 
 def unzip_to(paths: list[Path], extracted_root: Path) -> list[Path]:
     """
     Dézippe les fichiers .zip dans extracted_root.
@@ -142,23 +142,23 @@ def unzip_to(paths: list[Path], extracted_root: Path) -> list[Path]:
     """
     extracted_root = Path(extracted_root)
     extracted_root.mkdir(parents=True, exist_ok=True)
-
+ 
     out_dirs: list[Path] = []
     for p in paths:
         p = Path(p)
-
+ 
         if not p.name.lower().endswith(".zip"): # ignore les .zip.md5
             continue
-
+ 
         dest = extracted_root / p.stem  # stem enlève juste .zip
-
+ 
         # skip si déjà extrait (dossier existe et contient qqch)
         if dest.exists() and any(dest.iterdir()):
             out_dirs.append(dest)
             continue
-
+ 
         dest.mkdir(parents=True, exist_ok=True)
-
+ 
         try:
             with zipfile.ZipFile(p, "r") as z:
                 z.extractall(dest)
@@ -166,31 +166,31 @@ def unzip_to(paths: list[Path], extracted_root: Path) -> list[Path]:
             continue
         out_dirs.append(dest)
     return out_dirs
-
+ 
 # Ici si vous voulez savoir pourquoi on choisi ces periodes precisement c'est avec ces periodes que nous avions les meilleurs
 # resultats dans le notebook de visualisation
-
+ 
 REGION_WINDOWS = {
     "alps":     {"start": (9, 15),  "end": (10, 10)},
     "caucasus": {"start": (8, 15),  "end": (9, 15)},
     "andes":    {"start": (4, 1),  "end": (5, 1)},
 }
-
-
+ 
+ 
 def utm_epsg_from_bbox(bbox):
     lon = (bbox[0] + bbox[2]) / 2
     lat = (bbox[1] + bbox[3]) / 2
     zone = int((lon + 180) // 6) + 1
     return (32600 + zone) if lat >= 0 else (32700 + zone)
-
-
+ 
+ 
 def bbox_to_projected_bounds(bbox, epsg):
     transformer = pyproj.Transformer.from_crs(4326, epsg, always_xy=True)
     minx, miny = transformer.transform(bbox[0], bbox[1])
     maxx, maxy = transformer.transform(bbox[2], bbox[3])
     return (min(minx, maxx), min(miny, maxy), max(minx, maxx), max(miny, maxy))
-
-
+ 
+ 
 def search_items(bbox, start_date, end_date, max_cloud=60, limit=15, retries=6):
     last_err = None
     for k in range(retries):
@@ -210,13 +210,13 @@ def search_items(bbox, start_date, end_date, max_cloud=60, limit=15, retries=6):
             last_err = e
             time.sleep((2 ** k) + random.random())  # 1s,2s,4s...
     raise last_err
-
+ 
 def adaptive_buffer_deg(geom, k=0.5, min_buf=0.005, max_buf=0.02):
     minx, miny, maxx, maxy = geom.bounds
     max_dim = max(maxx - minx, maxy - miny)
     buf = k * max_dim
     return max(min_buf, min(max_buf, buf))
-
+ 
 def build_requests(
     glaciers_gdf,
     out_root: Path,
@@ -225,21 +225,21 @@ def build_requests(
 ):
     out_root = Path(out_root)
     rows = []
-
+ 
     for _, r in glaciers_gdf.iterrows():
         reg = r["region"]
         glac_id = r["glac_id"]
         y = int(r["year_img"])
         geom = r["geometry"]
-
+ 
         bbox = fixed_bbox_around_geom(
             geom_wgs84=geom,
             patch_size_px=patch_size_px,
             resolution=resolution,
         )
-
+ 
         out_path = out_root / "composites" / reg / f"{glac_id}_{y}_topk.tif"
-
+ 
         rows.append({
             "glac_id": glac_id,
             "region": reg,
@@ -253,10 +253,10 @@ def build_requests(
             "patch_size_px": patch_size_px,
             "resolution": resolution,
         })
-
+ 
     return gpd.GeoDataFrame(rows, geometry="geometry", crs=glaciers_gdf.crs)
-
-
+ 
+ 
 def fetch_composite(
     bbox,
     start_date,
@@ -270,21 +270,21 @@ def fetch_composite(
 ):
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-
+ 
     if out_path.exists():
         return {"status": "skipped", "path": str(out_path)}
-
+ 
     items = search_items(bbox, start_date, end_date, max_cloud=max_cloud, limit=limit)
     if len(items) == 0:
         return {"status": "no_items", "path": str(out_path)}
-
+ 
     epsg = utm_epsg_from_bbox(bbox)
     bounds = bbox_to_projected_bounds(bbox, epsg)
-
+ 
     # items = filter_readable_items(items, bbox, epsg, bounds, resolution, test_asset=bands[0])  ## jai mis en commentaire car trop long a run avec
     if len(items) == 0:
         return {"status": "no_readable_items", "path": str(out_path)}
-
+ 
     da = stackstac.stack(
         items,
         assets=list(bands),
@@ -292,15 +292,15 @@ def fetch_composite(
         resolution=resolution,
         bounds=bounds,
     ).chunk({"time": 1, "x": 1024, "y": 1024})
-
+ 
     if reducer == "median":
         comp = da.median(dim="time", skipna=True)
     else:
         comp = da.isel(time=0)
-
+ 
     comp = comp.assign_coords(band=list(bands))
     comp.rio.write_crs(f"EPSG:{epsg}", inplace=True)
-
+ 
     comp.rio.to_raster(
         out_path,
         compress="DEFLATE",
@@ -308,28 +308,28 @@ def fetch_composite(
         tiled=True,
         BIGTIFF="IF_SAFER",
     )
-
+ 
     return {"status": "ok", "path": str(out_path), "n_items": len(items), "epsg": epsg}
-
+ 
 def dates_for_region_year(region: str, year: int, region_windows=None):
     if region_windows is None:
         region_windows = REGION_WINDOWS
-
+ 
     cfg = region_windows.get(region)
     if cfg is None:
         raise ValueError(f"Fenêtre temporelle absente pour la région: {region}")
-
+ 
     sm, sd = cfg["start"]
     em, ed = cfg["end"]
-
+ 
     start_date = f"{year}-{sm:02d}-{sd:02d}"
     end_date   = f"{year}-{em:02d}-{ed:02d}"
     return start_date, end_date
-
+ 
 def run_fetch(
     requests_gdf,
     region_windows=None,
-    bands=("blue", "green", "red", "nir"),
+    bands=("blue", "green", "red", "nir", "swir16"),
     resolution=10,
     max_cloud=95,
     limit=80,
@@ -340,27 +340,27 @@ def run_fetch(
     ring_iters=12,
 ):
     statuses = []
-
+ 
     for _, row in requests_gdf.iterrows():
         y = int(row["year"])
         region = row["region"]
         glacier_geom_wgs84 = row["geometry"]
-
+ 
         start_date, end_date = dates_for_region_year(
             region=region,
             year=y,
             region_windows=region_windows,
         )
-
+ 
         bbox = (
             float(row["bbox_minlon"]),
             float(row["bbox_minlat"]),
             float(row["bbox_maxlon"]),
             float(row["bbox_maxlat"]),
         )
-
+ 
         out_path = Path(row["out_path"])
-
+ 
         try:
             meta = fetch_composite_topk(
                 bbox=bbox,
@@ -380,16 +380,16 @@ def run_fetch(
             )
         except Exception as e:
             meta = {"status": "error", "path": str(out_path), "error": repr(e)}
-
+ 
         statuses.append({
             "glac_id": row["glac_id"],
             "region": region,
             "year": y,
             **meta,
         })
-
+ 
     return pd.DataFrame(statuses)
-
+ 
 def year_from_filename(path: str | Path) -> int:
     """
     Extract year from filenames like: <glac_id>_2019_summer.tif
@@ -400,8 +400,8 @@ def year_from_filename(path: str | Path) -> int:
     if not m:
         raise ValueError(f"Could not parse year from filename: {p.name}")
     return int(m.group(1))
-
-
+ 
+ 
 def filter_readable_items(items, bbox, epsg, bounds, resolution, test_asset="blue"):
     good = []
     for it in items:
@@ -422,11 +422,11 @@ def filter_readable_items(items, bbox, epsg, bounds, resolution, test_asset="blu
         except Exception:
             continue
     return good
-
+ 
 def glims_mask_for_composite(tif_path, glims_gdf, max_gap_years=3):
     """
     Build a binary glacier mask aligned with a Sentinel-2 composite GeoTIFF.
-
+ 
     The function:
     - reads the composite GeoTIFF,
     - extracts the image year from the filename,
@@ -434,7 +434,7 @@ def glims_mask_for_composite(tif_path, glims_gdf, max_gap_years=3):
     - filters outlines whose year is close enough to the image year,
     - clips them to the patch extent,
     - rasterizes them into a binary mask where glacier=1 and background=0.
-
+ 
     Parameters
     ----------
     tif_path : str or Path
@@ -443,7 +443,7 @@ def glims_mask_for_composite(tif_path, glims_gdf, max_gap_years=3):
         GLIMS outlines with at least columns: glac_id, src_date_dt, geometry
     max_gap_years : int
         Maximum allowed gap in years between the image year and a GLIMS outline year
-
+ 
     Returns
     -------
     mask : np.ndarray
@@ -454,38 +454,42 @@ def glims_mask_for_composite(tif_path, glims_gdf, max_gap_years=3):
         All GLIMS outlines used to create the mask
     """
     tif_path = Path(tif_path)
-
+ 
     year_img = int(re.search(r"_(\d{4})_(summer|topk)$", tif_path.stem).group(1))
-
+ 
     da = rxr.open_rasterio(tif_path)
     img_crs = da.rio.crs
     transform = da.rio.transform()
     H, W = da.rio.height, da.rio.width
     patch_geom = box(*da.rio.bounds())
-
+ 
     gl = glims_gdf.copy()
     if gl.crs is None:
         gl = gl.set_crs(4326)
-
+ 
     gl["glac_id"] = gl["glac_id"].astype(str).str.strip()
     gl = gl.to_crs(img_crs)
-
+ 
     # garder tous les outlines qui intersectent le patch
     inter = gl[gl.intersects(patch_geom)].copy()
-
-    # filtrage temporel
+ 
+    # pour chaque glacier, ne garder que l'outline le plus proche de l'année image
     inter["gap"] = (inter["src_date_dt"].dt.year - year_img).abs()
-    inter = inter[inter["gap"] <= max_gap_years].copy()
-
+    inter = (
+        inter.sort_values(["glac_id", "gap"])
+             .drop_duplicates("glac_id", keep="first")
+             .drop(columns="gap")
+    )
+ 
     # clip à l'emprise du patch
     inter["geometry"] = inter.geometry.intersection(patch_geom)
-
+ 
     shapes = [
         (geom, 1)
         for geom in inter.geometry
         if geom is not None and not geom.is_empty
     ]
-
+ 
     mask = rasterize(
         shapes=shapes,
         out_shape=(H, W),
@@ -493,75 +497,84 @@ def glims_mask_for_composite(tif_path, glims_gdf, max_gap_years=3):
         fill=0,
         dtype=np.uint8,
     )
-
+ 
     return mask, year_img, inter
-
+ 
 def stretch(x):
     lo, hi = np.nanpercentile(x, 2), np.nanpercentile(x, 98)
     return np.clip((x - lo) / (hi - lo + 1e-6), 0, 1)
-
-def get_glims_outlines_for_patch(tif_path, glims_gdf, max_gap_years=3):
+ 
+def get_glims_outlines_for_patch(tif_path, glims_gdf, max_gap_years=None):
     tif_path = Path(tif_path)
     year_img = int(re.search(r"_(\d{4})_(summer|topk)$", tif_path.stem).group(1))
-
+ 
     da = rxr.open_rasterio(tif_path)
     img_crs = da.rio.crs
     patch_geom = box(*da.rio.bounds())
-
+ 
     gl = glims_gdf.copy()
     if gl.crs is None:
         gl = gl.set_crs(4326)
-
+ 
     gl["glac_id"] = gl["glac_id"].astype(str).str.strip()
     gl = gl.to_crs(img_crs)
-
+ 
     inter = gl[gl.intersects(patch_geom)].copy()
-    inter["gap"] = (inter["src_date_dt"].dt.year - year_img).abs()
-    inter = inter[inter["gap"] <= max_gap_years].copy()
-
+ 
     if len(inter) == 0:
         return inter, year_img
-
+ 
+    # Même logique que glims_mask_for_composite : outline le plus proche de
+    # l'année image, avec filtre max_gap_years — ce que le preview affiche
+    # correspond exactement à ce qui ira dans le masque.
+    inter["gap"] = (inter["src_date_dt"].dt.year - year_img).abs()
+    inter = (
+        inter.sort_values(["glac_id", "gap", "src_date_dt"])
+             .drop_duplicates("glac_id", keep="first")
+    )
+    if max_gap_years is not None:
+        inter = inter[inter["gap"] <= max_gap_years].copy()
+    inter = inter.drop(columns="gap")
+ 
     inter["geometry"] = inter.geometry.intersection(patch_geom)
     inter = inter[~inter.geometry.is_empty].copy()
-
+ 
     return inter, year_img
-
+ 
 def show_tif_rgb_with_outline(tif_path, glims_gdf=None, max_gap_years=3, ax=None):
     da = rxr.open_rasterio(tif_path).astype("float32")
     minx, miny, maxx, maxy = da.rio.bounds()
-
+ 
     blue  = stretch(da[0].values)
     green = stretch(da[1].values)
     red   = stretch(da[2].values)
     rgb = np.stack([red, green, blue], axis=-1)
-
+ 
     if ax is None:
         fig, ax = plt.subplots(figsize=(4, 4))
-
+ 
     ax.imshow(
         rgb,
         extent=[minx, maxx, miny, maxy],
         origin="upper",
         interpolation="bilinear"
     )
-
+ 
     if glims_gdf is not None:
         inter, year_img = get_glims_outlines_for_patch(
             tif_path, glims_gdf, max_gap_years=max_gap_years
         )
         if len(inter) > 0:
-            # remplissage léger pour mieux voir l’alignement
-            inter.plot(ax=ax, color="yellow", alpha=0.18, edgecolor="none")
-            # contour net par-dessus
-            inter.boundary.plot(ax=ax, color="yellow", linewidth=1.0)
+            dissolved = inter.dissolve()
+            dissolved.plot(ax=ax, color="yellow", alpha=0.18, edgecolor="none")
+            dissolved.boundary.plot(ax=ax, color="yellow", linewidth=1.0)
     else:
         year_img = "?"
-
+ 
     ax.set_title(f"{Path(tif_path).parent.name} | {Path(tif_path).stem} | year={year_img}", fontsize=8)
     ax.axis("off")
     return ax
-
+ 
 def build_composite_from_items(
     items,
     bbox,
@@ -571,10 +584,10 @@ def build_composite_from_items(
 ):
     if len(items) == 0:
         return None
-
+ 
     epsg = utm_epsg_from_bbox(bbox)
     bounds = bbox_to_projected_bounds(bbox, epsg)
-
+ 
     da = stackstac.stack(
         items,
         assets=list(bands),
@@ -582,22 +595,22 @@ def build_composite_from_items(
         resolution=resolution,
         bounds=bounds,
     ).chunk({"time": 1, "x": 1024, "y": 1024})
-
+ 
     if reducer == "median":
         comp = da.median(dim="time", skipna=True)
     elif reducer == "first":
         comp = da.isel(time=0)
     else:
         raise ValueError(f"Reducer inconnu: {reducer}")
-
+ 
     comp = comp.assign_coords(band=list(bands))
     comp.rio.write_crs(f"EPSG:{epsg}", inplace=True)
     return comp
-
+ 
 def save_composite_xarray(comp, out_path):
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-
+ 
     comp.rio.to_raster(
         out_path,
         compress="DEFLATE",
@@ -606,8 +619,8 @@ def save_composite_xarray(comp, out_path):
         BIGTIFF="IF_SAFER",
     )
     return out_path
-
-
+ 
+ 
 def fetch_composite_topk(
     bbox,
     glacier_geom_wgs84,
@@ -626,10 +639,10 @@ def fetch_composite_topk(
 ):
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-
+ 
     if out_path.exists():
         return {"status": "skipped", "path": str(out_path)}
-
+ 
     items = search_items(
         bbox=bbox,
         start_date=start_date,
@@ -639,7 +652,7 @@ def fetch_composite_topk(
     )
     if len(items) == 0:
         return {"status": "no_items", "path": str(out_path)}
-
+ 
     df_rank, _ = rank_dates_from_items_glacier(
         items=items,
         bbox=bbox,
@@ -648,16 +661,16 @@ def fetch_composite_topk(
         scl_resolution=scl_resolution,
         ring_iters=ring_iters,
     )
-
+ 
     best_dts = list(pd.to_datetime(df_rank.head(topk)["datetime"]))
     selected_items = [
         it for it in items
         if pd.Timestamp(it.datetime) in best_dts
     ]
-
+ 
     if len(selected_items) == 0:
         return {"status": "no_ranked_items", "path": str(out_path)}
-
+ 
     comp = build_composite_from_items(
         selected_items,
         bbox=bbox,
@@ -665,12 +678,12 @@ def fetch_composite_topk(
         resolution=resolution,
         reducer=reducer,
     )
-
+ 
     if comp is None:
         return {"status": "empty_composite", "path": str(out_path)}
-
+ 
     save_composite_xarray(comp, out_path)
-
+ 
     return {
         "status": "ok",
         "path": str(out_path),
@@ -680,7 +693,7 @@ def fetch_composite_topk(
         "start_date": start_date,
         "end_date": end_date,
     }
-
+ 
 def fixed_bbox_around_geom(geom_wgs84, patch_size_px=314, resolution=10):
     """
     Retourne une bbox WGS84 correspondant à un patch carré fixe.
@@ -689,14 +702,14 @@ def fixed_bbox_around_geom(geom_wgs84, patch_size_px=314, resolution=10):
     minx, miny, maxx, maxy = geom_wgs84.bounds
     center_lon = 0.5 * (minx + maxx)
     center_lat = 0.5 * (miny + maxy)
-
+ 
     epsg = utm_epsg_from_bbox((minx, miny, maxx, maxy))
-
+ 
     to_utm = Transformer.from_crs(4326, epsg, always_xy=True).transform
     to_wgs = Transformer.from_crs(epsg, 4326, always_xy=True).transform
-
+ 
     cx, cy = to_utm(center_lon, center_lat)
-
+ 
     half_size_m = 0.5 * patch_size_px * resolution
     patch_utm = box(
         cx - half_size_m,
@@ -704,6 +717,48 @@ def fixed_bbox_around_geom(geom_wgs84, patch_size_px=314, resolution=10):
         cx + half_size_m,
         cy + half_size_m,
     )
-
+ 
     patch_wgs = shp_transform(to_wgs, patch_utm)
     return patch_wgs.bounds
+ 
+def compute_ndsi(green, swir16):
+    """NDSI = (green - SWIR16) / (green + SWIR16), pixel-wise."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ndsi = (green - swir16) / (green + swir16)
+    ndsi[~np.isfinite(ndsi)] = np.nan
+    return ndsi
+ 
+ 
+def qc_composite(tif_path, snow_thresh=0.4, max_snow_frac=0.50, min_valid_frac=0.80):
+    """
+    Read a 5-band composite (B, G, R, NIR, SWIR16) and return QC metrics.
+ 
+    Returns a dict with:
+      - snow_frac:  fraction of valid pixels classified as snow by NDSI
+      - valid_frac: fraction of non-NaN pixels
+      - usable:     True if the image passes both thresholds
+    """
+    import rioxarray as rxr
+ 
+    da = rxr.open_rasterio(tif_path).astype("float32")
+    # band order: 1=blue, 2=green, 3=red, 4=nir, 5=swir16
+    green  = da.sel(band=2).values
+    swir16 = da.sel(band=5).values
+ 
+    valid = np.isfinite(green) & np.isfinite(swir16) & (green > 0.01)
+    valid_frac = valid.mean()
+ 
+    if valid.sum() == 0:
+        return dict(snow_frac=np.nan, valid_frac=0.0, usable=False)
+ 
+    ndsi = compute_ndsi(green, swir16)
+    snow_mask = valid & (ndsi > snow_thresh)
+    snow_frac = snow_mask.sum() / valid.sum()
+ 
+    usable = (snow_frac <= max_snow_frac) and (valid_frac >= min_valid_frac)
+ 
+    return dict(
+        snow_frac=float(snow_frac),
+        valid_frac=float(valid_frac),
+        usable=bool(usable),
+    )
