@@ -1,9 +1,8 @@
 from __future__ import annotations
-
+ 
 from pathlib import Path
 import os
 import requests
-from dotenv import load_dotenv
 import zipfile
 import pystac_client
 import pyproj
@@ -16,20 +15,20 @@ import re
 import rioxarray as rxr
 import numpy as np
 import matplotlib.pyplot as plt
-
+ 
 from shapely.geometry import box
 from rasterio.features import rasterize
 from shapely.ops import transform as shp_transform
 from glacier.visualisation import rank_dates_from_items_glacier
-
-
+ 
+ 
 BASE_URL = "https://daacdata.apps.nsidc.org/pub/DATASETS/nsidc0272_GLIMS_v1/"
 VERSION_TAG = "v01.0"
-
+ 
 STAC_URL = "https://earth-search.aws.element84.com/v1"
 COLLECTION = "sentinel-2-l2a"
-
-
+ 
+ 
 def _session() -> requests.Session:
     """ Pour télécharger le jeu de données il faut créer un compte Earthdata.
     Le truc c'est qu'on ne veut pas commit le username et mot de passe du compte sur github.
@@ -41,11 +40,11 @@ def _session() -> requests.Session:
     root = repo_root()
     netrc_path = root / "_netrc"
     os.environ["NETRC"] = str(netrc_path)  
-
+ 
     s = requests.Session()
     s.trust_env = True
     return s
-
+ 
 def _targets_for_date(date_yyyymmdd: str) -> list[str]:
     """
     Download les 4 fichiers (north/south + md5).
@@ -53,34 +52,34 @@ def _targets_for_date(date_yyyymmdd: str) -> list[str]:
     """
     if not (isinstance(date_yyyymmdd, str) and date_yyyymmdd.isdigit() and len(date_yyyymmdd) == 8):
         raise ValueError("date_yyyymmdd must be a string like '20260114'")
-
+ 
     def zip_name(region: str) -> str:
         return f"NSIDC-0272_glims_db_{region}_{date_yyyymmdd}_{VERSION_TAG}.zip"
-
+ 
     north = zip_name("north")
     south = zip_name("south")
     return [north, north + ".md5", south, south + ".md5"]
-
+ 
 def _download_one(session: requests.Session, url: str, out_path: Path) -> None:
     """
     Atomic download: writes to .part then renames, to avoid partial/corrupt files.
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_path.with_suffix(out_path.suffix + ".part")
-
+ 
     # skip si déjà downloaded
     if out_path.exists() and out_path.stat().st_size > 0:
         return
-
+ 
     with session.get(url, stream=True, timeout=300) as r:
         r.raise_for_status()
         with open(tmp, "wb") as f:
             for chunk in r.iter_content(chunk_size=1024 * 1024):
                 if chunk:
                     f.write(chunk)
-
+ 
     tmp.replace(out_path)
-
+ 
 def repo_root(start: Path | None = None) -> Path:
     """
     Helper pour s'assurer que l'on mets les données dans le dossier data au lieu de dans notebooks.
@@ -114,25 +113,6 @@ def fetch_data(date_yyyymmdd: str, raw_dir: str | Path = "data/raw/glims_v1") ->
         downloaded.append(out)
  
     return downloaded
- 
-def fetch_and_extract_glims(
-    date_yyyymmdd: str,
-    raw_dir: str | Path = "data/raw/glims_v1",
-    extracted_dir: str | Path = "data/raw/glims_v1_extracted",
-) -> list[Path]:
-    root = repo_root()
- 
-    raw_dir = Path(raw_dir)
-    if not raw_dir.is_absolute():
-        raw_dir = root / raw_dir
- 
-    extracted_dir = Path(extracted_dir)
-    if not extracted_dir.is_absolute():
-        extracted_dir = root / extracted_dir
- 
-    zips = fetch_data(date_yyyymmdd=date_yyyymmdd, raw_dir=raw_dir)
-    extracted = unzip_to(zips, extracted_root=extracted_dir)
-    return extracted
  
 def unzip_to(paths: list[Path], extracted_root: Path) -> list[Path]:
     """
@@ -211,12 +191,6 @@ def search_items(bbox, start_date, end_date, max_cloud=60, limit=15, retries=6):
             time.sleep((2 ** k) + random.random())  # 1s,2s,4s...
     raise last_err
  
-def adaptive_buffer_deg(geom, k=0.5, min_buf=0.005, max_buf=0.02):
-    minx, miny, maxx, maxy = geom.bounds
-    max_dim = max(maxx - minx, maxy - miny)
-    buf = k * max_dim
-    return max(min_buf, min(max_buf, buf))
- 
 def build_requests(
     glaciers_gdf,
     out_root: Path,
@@ -256,60 +230,6 @@ def build_requests(
  
     return gpd.GeoDataFrame(rows, geometry="geometry", crs=glaciers_gdf.crs)
  
- 
-def fetch_composite(
-    bbox,
-    start_date,
-    end_date,
-    out_path: Path,
-    bands=("blue", "green", "red", "nir"),
-    resolution=10,
-    max_cloud=60,
-    limit=15,
-    reducer="first",  # "median" or "first"
-):
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
- 
-    if out_path.exists():
-        return {"status": "skipped", "path": str(out_path)}
- 
-    items = search_items(bbox, start_date, end_date, max_cloud=max_cloud, limit=limit)
-    if len(items) == 0:
-        return {"status": "no_items", "path": str(out_path)}
- 
-    epsg = utm_epsg_from_bbox(bbox)
-    bounds = bbox_to_projected_bounds(bbox, epsg)
- 
-    # items = filter_readable_items(items, bbox, epsg, bounds, resolution, test_asset=bands[0])  ## jai mis en commentaire car trop long a run avec
-    if len(items) == 0:
-        return {"status": "no_readable_items", "path": str(out_path)}
- 
-    da = stackstac.stack(
-        items,
-        assets=list(bands),
-        epsg=epsg,
-        resolution=resolution,
-        bounds=bounds,
-    ).chunk({"time": 1, "x": 1024, "y": 1024})
- 
-    if reducer == "median":
-        comp = da.median(dim="time", skipna=True)
-    else:
-        comp = da.isel(time=0)
- 
-    comp = comp.assign_coords(band=list(bands))
-    comp.rio.write_crs(f"EPSG:{epsg}", inplace=True)
- 
-    comp.rio.to_raster(
-        out_path,
-        compress="DEFLATE",
-        predictor=2,
-        tiled=True,
-        BIGTIFF="IF_SAFER",
-    )
- 
-    return {"status": "ok", "path": str(out_path), "n_items": len(items), "epsg": epsg}
  
 def dates_for_region_year(region: str, year: int, region_windows=None):
     if region_windows is None:
@@ -390,38 +310,8 @@ def run_fetch(
  
     return pd.DataFrame(statuses)
  
-def year_from_filename(path: str | Path) -> int:
-    """
-    Extract year from filenames like: <glac_id>_2019_summer.tif
-    Returns an int year.
-    """
-    p = Path(path)
-    m = re.search(r"_(\d{4})_(summer|topk)$", p.stem)
-    if not m:
-        raise ValueError(f"Could not parse year from filename: {p.name}")
-    return int(m.group(1))
  
  
-def filter_readable_items(items, bbox, epsg, bounds, resolution, test_asset="blue"):
-    good = []
-    for it in items:
-        try:
-            da = stackstac.stack(
-                [it],
-                assets=[test_asset],
-                epsg=epsg,
-                resolution=resolution,
-                bounds=bounds,
-            )
-            # force une mini lecture
-            _ = da.isel(time=0, band=0).data
-            # déclenche un petit compute
-            import dask.array as da_  # local import
-            da_.asarray(_)[0:10, 0:10].compute()
-            good.append(it)
-        except Exception:
-            continue
-    return good
  
 def glims_mask_for_composite(tif_path, glims_gdf, max_gap_years=3):
     """
@@ -476,10 +366,12 @@ def glims_mask_for_composite(tif_path, glims_gdf, max_gap_years=3):
     # pour chaque glacier, ne garder que l'outline le plus proche de l'année image
     inter["gap"] = (inter["src_date_dt"].dt.year - year_img).abs()
     inter = (
-        inter.sort_values(["glac_id", "gap"])
+        inter.sort_values(["glac_id", "gap", "src_date_dt"])
              .drop_duplicates("glac_id", keep="first")
-             .drop(columns="gap")
     )
+    if max_gap_years is not None:
+        inter = inter[inter["gap"] <= max_gap_years].copy()
+    inter = inter.drop(columns="gap")
  
     # clip à l'emprise du patch
     inter["geometry"] = inter.geometry.intersection(patch_geom)
@@ -721,44 +613,3 @@ def fixed_bbox_around_geom(geom_wgs84, patch_size_px=314, resolution=10):
     patch_wgs = shp_transform(to_wgs, patch_utm)
     return patch_wgs.bounds
  
-def compute_ndsi(green, swir16):
-    """NDSI = (green - SWIR16) / (green + SWIR16), pixel-wise."""
-    with np.errstate(divide="ignore", invalid="ignore"):
-        ndsi = (green - swir16) / (green + swir16)
-    ndsi[~np.isfinite(ndsi)] = np.nan
-    return ndsi
- 
- 
-def qc_composite(tif_path, snow_thresh=0.4, max_snow_frac=0.50, min_valid_frac=0.80):
-    """
-    Read a 5-band composite (B, G, R, NIR, SWIR16) and return QC metrics.
- 
-    Returns a dict with:
-      - snow_frac:  fraction of valid pixels classified as snow by NDSI
-      - valid_frac: fraction of non-NaN pixels
-      - usable:     True if the image passes both thresholds
-    """
-    import rioxarray as rxr
- 
-    da = rxr.open_rasterio(tif_path).astype("float32")
-    # band order: 1=blue, 2=green, 3=red, 4=nir, 5=swir16
-    green  = da.sel(band=2).values
-    swir16 = da.sel(band=5).values
- 
-    valid = np.isfinite(green) & np.isfinite(swir16) & (green > 0.01)
-    valid_frac = valid.mean()
- 
-    if valid.sum() == 0:
-        return dict(snow_frac=np.nan, valid_frac=0.0, usable=False)
- 
-    ndsi = compute_ndsi(green, swir16)
-    snow_mask = valid & (ndsi > snow_thresh)
-    snow_frac = snow_mask.sum() / valid.sum()
- 
-    usable = (snow_frac <= max_snow_frac) and (valid_frac >= min_valid_frac)
- 
-    return dict(
-        snow_frac=float(snow_frac),
-        valid_frac=float(valid_frac),
-        usable=bool(usable),
-    )
