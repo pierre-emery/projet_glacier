@@ -56,6 +56,11 @@ class GlacierDataset(Dataset):
         da = rxr.open_rasterio(tif_path)
         img = da.values.astype(np.float32)  # (C, H, W)
         img = np.nan_to_num(img, nan=0.0)
+        #Check que la dimension est bel et bien 5, sinon on crée
+        # la bande swir pour que ca marche, même si c'est pas propre
+        if img.shape[0] == 4:
+            swir = np.zeros_like(img[0:1])
+            img = np.concatenate([img, swir], axis=0)
  
         # ── Masque (1, H, W) float32 dans [0, 1] ──
         mask = np.array(Image.open(mask_path), dtype=np.float32) / 255.0
