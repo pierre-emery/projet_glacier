@@ -137,6 +137,7 @@ def compute_band_stats(
         arr = rxr.open_rasterio(tif_path).values.astype(np.float32)
         arr = np.nan_to_num(arr, nan=0.0)
         for b in range(n_bands):
+            if (b >= len(arr)): continue
             valid = arr[b] != 0
             sums[b] += arr[b][valid].sum()
             sq_sums[b] += (arr[b][valid] ** 2).sum()
