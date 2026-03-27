@@ -90,7 +90,7 @@ def plot_history(history: dict) -> None:
     ax1.plot(history["val_loss"], label="Val")
     ax1.set_xlabel("Epoch")
     ax1.set_ylabel("Loss")
-    ax1.set_title("Dice + BCE Loss")
+    ax1.set_title("Dice + Focal Loss")
     ax1.legend()
  
     ax2.plot(history["train_iou"], label="Train")
