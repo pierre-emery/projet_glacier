@@ -72,6 +72,7 @@ class GlacierDataset(Dataset):
                 img[b] = (img[b] - self.mean[b]) / (self.std[b] + 1e-8)
  
         # Padding à pad_to × pad_to
+        # car u-net fait une division par 2
         img = self._pad(img)
         mask = self._pad(mask)
  
@@ -123,6 +124,17 @@ class GlacierDataset(Dataset):
         if k > 0:
             img = torch.rot90(img, k, [-2, -1])
             mask = torch.rot90(mask, k, [-2, -1])
+
+        # # Bruit gaussien léger : simule la variabilité atmosphérique
+        # if torch.rand(1).item() > 0.7:
+        #     noise = torch.randn_like(img) * 0.02
+        #     img = img + noise
+ 
+        # # Scaling aléatoire indépendant par bande (±10%) :
+        # # simule des conditions d'illumination différentes entre régions
+        # if torch.rand(1).item() > 0.8:
+        #     scale = torch.empty(img.shape[0], 1, 1).uniform_(0.9, 1.1)
+        #     img = img * scale
         return img, mask
  
  
@@ -176,3 +188,47 @@ def discover_pairs(
     for r, pairs in region_pairs.items():
         print(f"  {r:12s}: {len(pairs)} paires")
     return region_pairs
+
+def make_stratified_split(
+    region_pairs: dict[str, list[tuple[Path, Path]]],
+    test_regions: list[str],
+    val_frac: float = 0.20,
+    seed: int = 42,
+) -> tuple[
+    list[tuple[Path, Path]],
+    list[tuple[Path, Path]],
+    dict[str, list[tuple[Path, Path]]],
+]:
+    """
+    Parameters
+    ----------
+    region_pairs : dict {region: [(tif, mask), ...]}
+    test_regions : liste des régions réservées au test
+    val_frac     : fraction de chaque région non-test mise en validation
+    seed         : graine aléatoire
+ 
+    Returns
+    -------
+    train_pairs, val_pairs, test_pairs_dict
+    """
+    rng = np.random.default_rng(seed)
+    train_pairs: list[tuple[Path, Path]] = []
+    val_pairs: list[tuple[Path, Path]] = []
+    test_pairs: dict[str, list[tuple[Path, Path]]] = {
+        r: region_pairs.get(r, []) for r in test_regions
+    }
+ 
+    for region, pairs in region_pairs.items():
+        if region in test_regions:
+            continue
+        perm = rng.permutation(len(pairs))
+        n_val = max(1, int(len(pairs) * val_frac))
+        val_pairs.extend([pairs[i] for i in perm[:n_val]])
+        train_pairs.extend([pairs[i] for i in perm[n_val:]])
+ 
+    print(f"Train : {len(train_pairs)} paires (toutes régions non-test)")
+    print(f"Val   : {len(val_pairs)} paires (toutes régions non-test)")
+    for r, p in test_pairs.items():
+        print(f"Test  : {len(p):3d} paires ({r})")
+ 
+    return train_pairs, val_pairs, test_pairs

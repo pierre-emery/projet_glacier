@@ -32,13 +32,69 @@ class Down(nn.Module):
     def forward(self, x):
         return self.block(x)
  
+class AttentionGate(nn.Module):
+    """
+    Attention Gate de l'Attention U-Net (Oktay et al., 2018).
  
+    Filtre les skip connections pour focaliser le décodeur sur les régions
+    pertinentes (ici les glaciers), en supprimant le bruit de fond.
+ 
+    Le gate signal g (issu du niveau inférieur, plus profond) guide
+    l'attention sur le signal skip x (même résolution que la sortie).
+ 
+    Parameters
+    ----------
+    f_g : int   Canaux du gate signal g (niveau inférieur).
+    f_x : int   Canaux du skip signal x.
+    f_int : int Canaux intermédiaires (typiquement f_x // 2).
+    """
+ 
+    def __init__(self, f_g: int, f_x: int, f_int: int):
+        super().__init__()
+        self.W_g = nn.Sequential(
+            nn.Conv2d(f_g, f_int, kernel_size=1, bias=False),
+            nn.BatchNorm2d(f_int),
+        )
+        self.W_x = nn.Sequential(
+            nn.Conv2d(f_x, f_int, kernel_size=1, bias=False),
+            nn.BatchNorm2d(f_int),
+        )
+        self.psi = nn.Sequential(
+            nn.Conv2d(f_int, 1, kernel_size=1, bias=False),
+            nn.BatchNorm2d(1),
+            nn.Sigmoid(),
+        )
+        self.relu = nn.ReLU(inplace=True)
+ 
+    def forward(self, g: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        # g est au niveau du décodeur (après upsample), x est le skip
+        g1 = self.W_g(g)
+        x1 = self.W_x(x)
+        # Alignement spatial si nécessaire (différence d'1 pixel possible)
+        if g1.shape[2:] != x1.shape[2:]:
+            g1 = nn.functional.interpolate(
+                g1, size=x1.shape[2:], mode="bilinear", align_corners=False
+            )
+        psi = self.relu(g1 + x1)
+        psi = self.psi(psi)
+        return x * psi  # masque d'attention appliqué au skip
+
+
 class Up(nn.Module):
     """ConvTranspose (×2) → concat skip → DoubleConv"""
  
-    def __init__(self, in_ch: int, out_ch: int):
+    def __init__(self, in_ch: int, out_ch: int, use_attention: bool = True):
         super().__init__()
         self.up = nn.ConvTranspose2d(in_ch, in_ch // 2, kernel_size=2, stride=2)
+        self.use_attention = use_attention
+        if use_attention:
+            # g = in_ch // 2 (sortie de l'upsample), x = in_ch // 2 (skip)
+            self.attn = AttentionGate(
+                f_g=in_ch // 2,
+                f_x=in_ch // 2,
+                f_int=in_ch // 4,
+            )
+
         self.conv = DoubleConv(in_ch, out_ch)
  
     def forward(self, x, skip):
@@ -53,6 +109,8 @@ class Up(nn.Module):
                 dy // 2 : dy // 2 + x.size(2),
                 dx // 2 : dx // 2 + x.size(3),
             ]
+        if self.use_attention:
+            skip = self.attn(g=x, x=skip)
         return self.conv(torch.cat([skip, x], dim=1))
  
  
@@ -84,6 +142,7 @@ class UNet(nn.Module):
         out_channels: int = 1,
         features: list[int] | None = None,
         dropout: float = 0.3,
+        use_attention: bool = True,
     ):
         super().__init__()
         if features is None:
@@ -102,11 +161,11 @@ class UNet(nn.Module):
             nn.Dropout2d(dropout),
         )
  
-        # Decoder
-        self.dec3 = Up(f[3] * 2, f[3])
-        self.dec2 = Up(f[3], f[2])
-        self.dec1 = Up(f[2], f[1])
-        self.dec0 = Up(f[1], f[0])
+        # Decoder avec Attention Gates optionnels
+        self.dec3 = Up(f[3] * 2, f[3], use_attention=use_attention)
+        self.dec2 = Up(f[3],     f[2], use_attention=use_attention)
+        self.dec1 = Up(f[2],     f[1], use_attention=use_attention)
+        self.dec0 = Up(f[1],     f[0], use_attention=use_attention)
  
         # Tête de segmentation
         self.head = nn.Conv2d(f[0], out_channels, kernel_size=1)
