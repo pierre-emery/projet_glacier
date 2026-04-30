@@ -30,11 +30,6 @@ def ensure_wgs84(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         return gdf.set_crs(4326)
     return gdf.to_crs(4326)
  
-def ensure_crs(gdf: gpd.GeoDataFrame, epsg: int = 4326) -> gpd.GeoDataFrame:
-    if getattr(gdf, "crs", None) is None:
-        return gdf.set_crs(epsg)
-    return gdf
- 
 def fix_invalid_geometries(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     gdf = gdf.copy()
     try:
