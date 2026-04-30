@@ -1,0 +1,187 @@
+
+%  Diagramme de l'architecture U-Net (TikZ)
+
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+    font=\small,
+    % --- styles des blocs ---
+    attn/.style={
+        draw, fill=yellow!40, diamond, 
+        minimum width=0.4cm, minimum height=0.4cm,
+        inner sep=0pt, line width=0.6pt
+    },
+    conv/.style={
+        draw, fill=blue!20, rounded corners=3pt,
+        minimum width=1.0cm, minimum height=2.2cm,
+        line width=0.7pt
+    },
+    bottle/.style={
+        draw, fill=purple!25, rounded corners=3pt,
+        minimum width=1.0cm, minimum height=1.4cm,
+        line width=0.7pt
+    },
+    pool/.style={
+        draw, fill=red!15, rounded corners=2pt,
+        minimum width=0.35cm, minimum height=2.2cm,
+        line width=0.6pt
+    },
+    up/.style={
+        draw, fill=green!15, rounded corners=2pt,
+        minimum width=0.35cm, minimum height=2.2cm,
+        line width=0.6pt
+    },
+    head/.style={
+        draw, fill=orange!25, rounded corners=3pt,
+        minimum width=0.7cm, minimum height=2.2cm,
+        line width=0.7pt
+    },
+    lbl/.style={font=\scriptsize, align=center},
+    % --- flèches ---
+    arr/.style={-{Stealth[length=4pt]}, line width=0.8pt},
+    skip/.style={-{Stealth[length=4pt]}, dashed, line width=0.8pt, color=gray!70},
+]
+
+% espacement
+\def\dx{1.55}   % entre blocs conv successifs
+\def\dxp{0.55}  % largeur pool/up
+
+%encodeur
+% enc0  (in=5, out=32)  h=2.2
+\node[conv, minimum height=2.2cm] (e0) at (0,0) {};
+\node[lbl, above=2pt of e0] {32};
+
+% pool0
+\node[pool, right=0.12cm of e0] (p0) {};
+
+% enc1  (out=64)  h=1.8
+\node[conv, minimum height=1.8cm, right=0.12cm of p0] (e1) {};
+\node[lbl, above=2pt of e1] {64};
+
+% pool1
+\node[pool, minimum height=1.8cm, right=0.12cm of e1] (p1) {};
+
+% enc2  (out=128)  h=1.4
+\node[conv, minimum height=1.4cm, right=0.12cm of p1] (e2) {};
+\node[lbl, above=2pt of e2] {128};
+
+% pool2
+\node[pool, minimum height=1.4cm, right=0.12cm of e2] (p2) {};
+
+% enc3  (out=256)  h=1.0
+\node[conv, minimum height=1.0cm, right=0.12cm of p2] (e3) {};
+\node[lbl, above=2pt of e3] {256};
+
+% pool3
+\node[pool, minimum height=1.0cm, right=0.12cm of e3] (p3) {};
+
+%bottleneck
+\node[bottle, right=0.12cm of p3] (bn) {};
+\node[lbl, above=2pt of bn] {512};
+\node[lbl, below=2pt of bn] {Dropout\\(p=0.3)};
+
+% decodeur
+% up3
+\node[up, minimum height=1.0cm, right=0.12cm of bn] (u3) {};
+% dec3  (out=256)  h=1.0
+\node[conv, minimum height=1.0cm, right=0.12cm of u3] (d3) {};
+\node[lbl, above=2pt of d3] {256};
+
+% up2
+\node[up, minimum height=1.4cm, right=0.12cm of d3] (u2) {};
+% dec2  (out=128)  h=1.4
+\node[conv, minimum height=1.4cm, right=0.12cm of u2] (d2) {};
+\node[lbl, above=2pt of d2] {128};
+
+% up1
+\node[up, minimum height=1.8cm, right=0.12cm of d2] (u1) {};
+% dec1  (out=64)  h=1.8
+\node[conv, minimum height=1.8cm, right=0.12cm of u1] (d1) {};
+\node[lbl, above=2pt of d1] {64};
+
+% up0
+\node[up, minimum height=2.2cm, right=0.12cm of d1] (u0) {};
+% dec0  (out=32)  h=2.2
+\node[conv, minimum height=2.2cm, right=0.12cm of u0] (d0) {};
+\node[lbl, above=2pt of d0] {32};
+
+% (Conv 1×1 → logits)
+\node[head, right=0.3cm of d0] (hd) {};
+\node[lbl, above=2pt of hd] {Conv\\$1{\times}1$};
+
+% entrée et sortie
+\node[lbl, left=0.35cm of e0] (inp) {Entrée\\$320{\times}320$\\5 bandes};
+\draw[arr] (inp) -- (e0);
+
+\node[lbl, right=0.35cm of hd] (out) {Masque\\$320{\times}320$\\(logits)};
+\draw[arr] (hd) -- (out);
+
+% flèches
+\foreach \a/\b in {e0/p0, p0/e1, e1/p1, p1/e2, e2/p2, p2/e3, e3/p3,
+                   p3/bn, bn/u3, u3/d3, d3/u2, u2/d2, d2/u1, u1/d1,
+                   d1/u0, u0/d0, d0/hd}
+    \draw[arr] (\a) -- (\b);
+
+
+%skip connections
+% Calcul des positions y pour les arcs
+% enc0 → dec0  (niveau 0, h=2.2)
+% enc3 → dec3 (avec Attention Gate)
+\node[attn] (ag3) at ($(d3.north)+(0,0.55)$) {};
+\draw[skip] (e3.north) to[out=90, in=90, looseness=0.40] (ag3.north);
+\draw[arr, color=gray!70] (ag3) -- (d3.north);
+
+% enc2 → dec2 (avec Attention Gate)
+\node[attn] (ag2) at ($(d2.north)+(0,0.55)$) {};
+\draw[skip] (e2.north) to[out=90, in=90, looseness=0.34] (ag2.north);
+\draw[arr, color=gray!70] (ag2) -- (d2.north);
+
+% enc1 → dec1 (avec Attention Gate)
+\node[attn] (ag1) at ($(d1.north)+(0,0.55)$) {};
+\draw[skip] (e1.north) to[out=90, in=90, looseness=0.30] (ag1.north);
+\draw[arr, color=gray!70] (ag1) -- (d1.north);
+
+% enc0 → dec0 (avec Attention Gate)
+\node[attn] (ag0) at ($(d0.north)+(0,0.55)$) {};
+\draw[skip] (e0.north) to[out=90, in=90, looseness=0.28] (ag0.north);
+\draw[arr, color=gray!70] (ag0) -- (d0.north);
+
+
+%légende
+\begin{scope}[shift={(0,-2.2)}]
+    \node[conv,   minimum height=0.45cm, minimum width=0.75cm] (le) at (0,0) {};
+    \node[lbl, right=0.1cm of le] {DoubleConv (Conv $3{\times}3$ $\to$ BN $\to$ ReLU) $\times 2$};
+
+    \node[pool,   minimum height=0.45cm, minimum width=0.35cm] (lp) at (0,-0.65) {};
+    \node[lbl, right=0.1cm of lp] {MaxPool $2{\times}2$};
+
+    \node[up,     minimum height=0.45cm, minimum width=0.35cm] (lu) at (3.5,-0.65) {};
+    \node[lbl, right=0.1cm of lu] {ConvTranspose $2{\times}2$};
+
+    \node[bottle, minimum height=0.45cm, minimum width=0.75cm] (lb) at (12,0) {};
+    \node[lbl, right=0.1cm of lb] {Bottleneck + Dropout};
+
+    % skip legend
+    \draw[skip] (7.2,0) -- (8.0,0);
+    \node[lbl, right=0.05cm] at (8.0,0) {Skip connection};
+    \node[attn] (la) at (7.2,-0.65) {};
+    \node[lbl, right=0.1cm of la] {Attention Gate};
+\end{scope}
+
+% labels encodeur/decodeur/bottleneck
+\node[lbl, gray, above=0.55cm] at ($(e0)!0.5!(p3)$) {\textsc{Encodeur}};
+\node[lbl, gray, above=0.55cm] at ($(u3)!0.5!(d0)$) {\textsc{Décodeur}};
+\node[lbl, gray, above=0.55cm] at (bn)              {\textsc{Bottleneck}};
+
+
+\foreach \n in {p0,p1,p2,p3}
+    \node[lbl, rotate=90, font=\tiny, text=red!60!black] at (\n) {MP};
+\foreach \n in {u0,u1,u2,u3}
+    \node[lbl, rotate=90, font=\tiny, text=green!50!black] at (\n) {CT};
+
+\end{tikzpicture}
+}
+\caption{Architecture U-Net avec Attention Gates utilisée pour la segmentation glaciaire.}
+\label{fig:unet_architecture}
+\end{figure}
