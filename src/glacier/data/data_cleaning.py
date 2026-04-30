@@ -30,6 +30,11 @@ def ensure_wgs84(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         return gdf.set_crs(4326)
     return gdf.to_crs(4326)
  
+def ensure_crs(gdf: gpd.GeoDataFrame, epsg: int = 4326) -> gpd.GeoDataFrame:
+    if getattr(gdf, "crs", None) is None:
+        return gdf.set_crs(epsg)
+    return gdf
+ 
 def fix_invalid_geometries(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     gdf = gdf.copy()
     try:
@@ -137,12 +142,6 @@ def clean_glims_for_satellite(
     max_year: int = 2026,
     keep_regions=("alps", "caucasus", "andes"),
 ) -> gpd.GeoDataFrame:
-"""
-Prépare les polygones GLIMS pour l'alignement avec Sentinel-2:
--filtrage des dates
--suppression des polygones vides ou invalides
--conversion vers EPSG:4326(WGS84)
-"""
     gdf = keep_outlines(gdf)
     gdf = drop_empty_geometries(gdf)
     gdf = ensure_wgs84(gdf)
@@ -288,7 +287,30 @@ def select_outline_closest_to_year(
          .copy()
     )
     return g.reset_index(drop=True)
-
+ 
+def clean_glims_outlines(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    gdf = gdf.copy()
+ 
+    gdf = keep_outlines(gdf)
+    gdf = drop_empty_geometries(gdf)
+    gdf = ensure_crs(gdf, epsg=4326)
+    gdf = fix_invalid_geometries(gdf)
+ 
+    gdf = parse_src_date(gdf, col="src_date")
+    gdf = parse_anlys_time(gdf, col="anlys_time")
+ 
+    gdf = clean_elevations_soft(
+        gdf,
+        sentinel=-9999,
+        set_nonpositive_to_nan=False,
+        enforce_order=False,
+    )
+ 
+    gdf = filter_positive_area(gdf, col="area")
+    gdf = cast_categories(gdf)
+    gdf = drop_exact_dupes(gdf)
+ 
+    return gdf.reset_index(drop=True)
  
  
 def make_temporal_view(
